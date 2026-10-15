@@ -1,0 +1,91 @@
+# 本地对账工作台 · Local Reconcile
+
+**把银行流水和银行日记账，核对成一份有依据、能继续复核的结果。**
+
+[![Windows checks](https://github.com/edcee314159/local-reconcile/actions/workflows/ci.yml/badge.svg)](https://github.com/edcee314159/local-reconcile/actions/workflows/ci.yml)
+
+[English](README.en.md)
+
+中文 Windows 桌面工具。核心流程本地运行，无需账号、API Key 或上传流水。自有代码采用 MIT 许可，打包依赖保留各自许可。
+
+目前为 **0.1.0 alpha 公开测试版**，使用虚构案例与自动化测试验证。
+
+## 先体验，再导入自己的表
+
+本次先公开 **源码 Alpha**，方便试用、检查与贡献。当前仓库未提供已发布的 Windows 便携包，请按下方「从源码启动」操作。
+
+1. 点击「使用虚构示例」。
+2. 看清双方字段与金额方向，再勾选确认。
+3. 点击「开始核对」，选择候选查看原始行与核对依据。
+4. 对核实过的关系确认或拒绝，保存项目，或导出 Excel。
+
+示例同时展示正常逐笔、同额多笔、金额差异和双方单边记录。内置示例全部为虚构数据，不需要真实财务数据就能体验。
+
+## 从源码启动
+
+适用于 Windows x64，需安装 Python 3.12。下载或克隆仓库后，在仓库根目录打开 PowerShell，执行：
+
+    py -3.12 -m venv D:\Codex\local-reconcile\user-environment
+    $env:PIP_CACHE_DIR = 'D:\Codex\local-reconcile\user-cache'
+    D:\Codex\local-reconcile\user-environment\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+    $env:PYTHONPATH = Join-Path (Get-Location) 'src'
+    D:\Codex\local-reconcile\user-environment\Scripts\python.exe -B -m local_reconcile
+
+首次安装依赖需要联网，完成后应用核心流程本地运行。若 D 盘不可用，可将这些环境与缓存路径改为源码目录之外的可写位置。再次运行只需执行最后两行。
+
+## 能做什么
+
+- 读取 .xlsx 和 UTF-8 / UTF-8 BOM .csv；选择工作表、表头行及字段。
+- 确认单金额列的正负方向，或使用收入、支出双列。
+- 按共同业务编号、金额、日期和交易对方形成候选，显示规则依据。
+- 对同额多笔保留歧义；编号冲突不通过放宽规则强行对平。
+- 确认、拒绝、撤销、手工指定一对一，保留操作记录。
+- 保存包含输入快照的 .lrproj，重开后继续复核。
+- 导出八张工作表，保留原始明细、来源行、参数与人工状态。
+
+**候选不等于已确认。** 批量确认只接受无冲突、无歧义的共同编号强依据候选，确认前展示数量和净额。
+
+## 输入要求
+
+一次核对同一个人民币银行账户，两份文件分别为银行流水和对应的银行日记账。日期与金额必需，摘要、交易对方与共同业务编号可选。
+
+单金额列统一成「收入正、支出负」。不同软件的“借/贷”口径可能不同，请看方向预览后确认。银行流水号和企业凭证号不默认视为共同业务编号。
+
+账号与币种可来自列或由用户声明，报告区分声明与文件核验。金额、日期解析错误会阻止正式核对，不静默跳过。文本型编号的前导零保留；数字单元格已经丢失的长编号精度无法恢复。
+
+支持明确的年月日；日/月顺序不明确时须选择格式。共同编号匹配可设置 0—31 天日期容差，默认 0 天。普通、弱依据候选只处理同日记录。
+
+首版上限：每份文件 25 MiB、100,000 行、200 列；项目 100 MiB。扫描件、PDF、OFD、旧版 .xls、外币、跨账户和自动组合核销暂不支持。
+
+## 导出内容
+
+核对总览、已确认关系、待确认候选、歧义与未匹配、银行原始明细、日记账原始明细、输入检查、参数与操作记录。
+
+金额运算使用整数分。报告统计值预先计算，候选不重复计入已确认金额。超过 Excel 可安全表示精度的金额以文本保留。原始文本按字符串写入，不执行源文件中的公式、宏或外部链接。
+
+## 本地数据
+
+原始输入不被覆盖。项目文件包含财务明细快照且未加密，请选择适合的本地保存位置。应用不主动上传数据、不内置遥测或自动更新请求。
+
+请勿把真实流水、账号、密钥或 .lrproj 项目提交到公开仓库。反馈问题优先用内置示例、虚构数据或经授权的脱敏案例。
+
+## 开发与验证
+
+需要 Windows 10 1809+ / Windows 11 x64、Python 3.12。创建独立环境，从 requirements-dev.lock 安装固定依赖：
+
+    python -m pip install --require-hashes -r requirements-dev.lock
+
+验证源码与打包命令（用实际绝对路径替换参数）：
+
+    powershell -File scripts/verify.ps1 -PythonPath <独立环境的python.exe> -OutputRoot <源码之外的测试目录>
+    powershell -File scripts/build_windows.ps1 -PythonPath <独立环境的python.exe> -OutputRoot <源码之外的构建目录>
+
+构建脚本自动检查源码、收集第三方许可及对应 Qt 源码、打包并验证发行内容。自行构建出的便携包包含解释器、Qt 和运行组件，使用者无需另装 Python；本次源码 Alpha 尚未附加该安装包。third_party/SOURCE_INFO.md 说明重建与替换库的方法。
+
+基准与真实演示由 scripts/benchmark.py、scripts/capture_demo.py 在外部输出目录生成；请写明运行配置，不把合成数据成绩宣称为真实业务准确率。
+
+## 反馈与贡献
+
+欢迎反馈无法识别的表头、可复现的歧义和操作体验问题。提交 Issue 时说明系统、版本、复现步骤、期望结果，并使用虚构样例。贡献流程见 CONTRIBUTING.md。
+
+尚未完成真实企业试用和干净 Windows 机器验收。独立代码复核和合成测试不能替代财务人员验证。正式核算判断仍需结合业务资料，由使用者复核。
