@@ -21,6 +21,15 @@ def create_application(argv):
 
 def main():
     app=create_application(sys.argv)
+    if "--business-smoke-test" in sys.argv:
+        import argparse
+        from .business.smoke import run_business_smoke
+        parser=argparse.ArgumentParser()
+        parser.add_argument("--business-smoke-test",action="store_true")
+        parser.add_argument("--output-dir",type=Path,required=True)
+        options=parser.parse_args()
+        run_business_smoke(options.output_dir)
+        return 0
     if "--smoke-test" in sys.argv:
         import argparse
         from .smoke import run_smoke
