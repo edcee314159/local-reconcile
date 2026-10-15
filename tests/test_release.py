@@ -44,3 +44,19 @@ def test_packaged_executable_smoke(tmp_path):
     data=json.loads((tmp_path/"synthetic-smoke"/"smoke-result.json").read_text(encoding="utf-8"))
     assert data["status"]=="ok" and data["confirmed_pairs"]==4
 
+
+
+def test_packaged_five_business_workflows(tmp_path):
+    import subprocess
+    p=release_dir();env=os.environ.copy()
+    env["PATH"]=os.environ["SystemRoot"]+r"\System32;"+os.environ["SystemRoot"]
+    env.pop("PYTHONPATH",None);env.pop("PYTHONHOME",None)
+    env["QT_QPA_PLATFORM"]="offscreen"
+    output=tmp_path/"中文业务 自检"
+    result=subprocess.run([str(p/"LocalReconcile.exe"),"--business-smoke-test","--output-dir",str(output)],
+                          env=env,capture_output=True,timeout=25,creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode==0
+    data=json.loads((output/"business-smoke.json").read_text(encoding="utf-8"))
+    assert data["combination_relations"]==1 and data["difference_explanations"]==1
+    assert data["remaining_receivable_minor"]==700000
+    assert data["internal_transfers"]==1 and data["closed_periods"]==1

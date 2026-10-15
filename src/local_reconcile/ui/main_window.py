@@ -25,10 +25,12 @@ class MainWindow(QMainWindow):
         root=QWidget();root.setObjectName("root");self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         sidebar=QFrame();sidebar.setObjectName("sidebar");sidebar.setFixedWidth(208);side=QVBoxLayout(sidebar);side.setContentsMargins(21,32,21,24);side.setSpacing(12)
         brand=QLabel("本地对账");brand.setObjectName("brand");side.addWidget(brand)
-        sub=QLabel("LOCAL RECONCILE\n公开测试版  ·  0.1.0");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
+        sub=QLabel("LOCAL RECONCILE\n公开测试版  ·  0.2.0");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
         self.home_nav=self._nav("工作台首页",lambda:self.go(0));self.import_nav=self._nav("01  导入与字段",lambda:self._edit_import())
         self.results_nav=self._nav("02  核对与复核",lambda:self.go(2));self.results_nav.setEnabled(False)
         for button in (self.home_nav,self.import_nav,self.results_nav):side.addWidget(button)
+        self.business_button=QPushButton("03  业务核算");self.business_button.setObjectName("nav");self.business_button.clicked.connect(self.open_business);side.addWidget(self.business_button)
+        self.business_window=None
         side.addStretch()
         for text in ("●  全程本地处理","人民币 · 单账户 · 逐笔","保留来源，人工确认"):
             l=QLabel(text);l.setObjectName("sideHint");side.addWidget(l)
@@ -50,6 +52,11 @@ class MainWindow(QMainWindow):
         for panel in (self.import_page.bank,self.import_page.ledger):
             panel.choose.connect(self._choose_source);panel.reload.connect(self._reload_source)
         self.go(0);self._buttons()
+    def open_business(self):
+        from .business_window import BusinessWindow
+        if self.business_window is None:self.business_window=BusinessWindow(self)
+        self.business_window.show();self.business_window.raise_();self.business_window.activateWindow()
+
     def _nav(self,label,callback):
         b=QPushButton(label);b.setObjectName("nav");b.setCheckable(True);b.clicked.connect(callback);return b
     def _home(self):
@@ -219,6 +226,8 @@ class MainWindow(QMainWindow):
             self.save_to(self.project_path);return True
         return False
     def closeEvent(self,event):
+        if self.business_window is not None and self.business_window.isVisible():
+            if not self.business_window.close():event.ignore();return
         if self.dirty:
             answer=QMessageBox.question(self,"尚未保存","保存当前核对项目后退出？",QMessageBox.Save|QMessageBox.Discard|QMessageBox.Cancel,QMessageBox.Cancel)
             if answer==QMessageBox.Save:
