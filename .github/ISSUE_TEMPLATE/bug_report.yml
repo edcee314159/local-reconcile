@@ -1,0 +1,24 @@
+name: 问题反馈
+description: 使用虚构样例报告可复现的问题
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传真实流水、完整账号、密钥或本地项目文件。优先使用虚构示例。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 系统与程序版本
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤与虚构数据
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果与实际结果
+    validations:
+      required: true
