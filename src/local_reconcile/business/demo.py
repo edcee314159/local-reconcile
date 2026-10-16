@@ -36,4 +36,36 @@ def make_demo():
         raw=_raw("bank" if role=="bank" else "ledger",f"虚构-{role}-{account or '往来'}.csv",rows)
         m=MappingSpec(party_col=2,reference_col=3,summary_col=4,declared_account=account or "OPEN-ITEMS",confirmed=True)
         w=add_batch(w,role,account,raw,m)
+    return _reporting_examples(_expansion_examples(w))
+
+
+def _expansion_examples(w):
+    inputs=[
+      ("bank",[
+        ["2026-10-10","100","虚构退款客户","ORIG-08","原收款100元，后续退30元"],
+        ["2026-10-12","-30","虚构退款客户","REFUND-08","部分退款30元"],
+        ["2026-10-10","-100","虚构预付供应商","PREPAY-09","先支付100元预付款"],
+        ["2026-10-22","30","虚构预付供应商","REFUND-09","退回未使用预付款30元"],
+        ["2026-10-15","60","虚构组合客户","N2N-10","合并结算第一笔"],
+        ["2026-10-15","40","虚构组合客户","N2N-10","合并结算第二笔"]]),
+      ("ledger",[
+        ["2026-10-15","70","虚构组合客户","N2N-10","两笔账目之一"],
+        ["2026-10-15","30","虚构组合客户","N2N-10","两笔账目之二"]]),
+      ("receivable",[["2026-10-11","100","虚构退款客户","INV-08","核销后部分退款恢复余额"]]),
+      ("payable",[["2026-10-20","100","虚构预付供应商","INV-09","预付后形成应付单据"]])]
+    for role,rows in inputs:
+        account="DEMO-A" if role in ("bank","ledger") else ""
+        raw=_raw("bank" if role=="bank" else "ledger",f"虚构扩展-{role}.csv",rows)
+        m=MappingSpec(party_col=2,reference_col=3,summary_col=4,declared_account=account or "OPEN-ITEMS",confirmed=True)
+        w=add_batch(w,role,account,raw,m)
+    return w
+
+
+def _reporting_examples(w):
+    from dataclasses import replace
+    for role,rows in (("receivable",[["2026-07-01","1000","虚构逾期客户","AGING-01","长期未结清","2026-10-15"],["2026-10-20","500","虚构未到期客户","AGING-02","未到期应收","2026-11-20"]]),
+                      ("payable",[["2026-09-15","300","虚构到期供应商","AGING-03","到期应付","2026-10-25"]])):
+        raw=_raw("ledger",f"虚构账龄-{role}.csv",rows);raw=replace(raw,headers=raw.headers+("到期日",))
+        m=MappingSpec(party_col=2,reference_col=3,summary_col=4,declared_account="OPEN-ITEMS",confirmed=True)
+        w=add_batch(w,role,"",raw,m,due_col=5)
     return w

@@ -5,6 +5,8 @@ import json,os,tempfile
 from .models import Account,Batch,Settings,Event,Workspace
 from .workspace import new_workspace,add_account,add_batch,record_event,replay,period_end,active_records,fail
 from .operations import open_items,outstanding
+from .settlements import advance_rows, allocation_net
+from .reporting import bank_statement,aging_report,AGE_BUCKETS,TIMING_CATEGORIES
 from ..project_store import _encode,_decode,validate_snapshot
 from ..amounts import format_amount
 from ..domain import LocalReconcileError,check_cancel,never_cancel
@@ -107,9 +109,15 @@ def export_workspace(w,path,cancelled=never_cancel):
       "差额说明":["说明编号","银行记录","账面记录","差额（元）","类别","结算依据","状态","期间"],
       "未达明细":["记录编号","来源","账户","日期","金额（元）","对方","编号","账龄天数","已有差额说明"],
       "期间快照":["期间","类型","记录或关系编号","余额（元）"],
-      "往来核销":["核销编号","银行记录","往来单据记录","分配金额（元）","依据","期间"],
+      "往来核销":["核销编号","银行记录","往来单据记录","原核销金额（元）","依据","期间","退款后净核销（元）","预收预付登记"],
       "往来余额":["记录编号","类型","往来单位","单据编号","单据日期","单据金额（元）","已核销（元）","未结清（元）","账龄天数","到期日","逾期天数"],
       "内部转账":["关系编号","转出记录","转出账户","转入记录","转入账户","转入金额（元）","手续费（元）","依据","期间"],
+      "退款冲销":["关系编号","原银行记录","退款流水","金额（元）","类别","关联核销","关联预收预付","依据","期间"],
+      "预收预付余额":["登记编号","类型","银行记录","往来单位","原登记金额（元）","未核销余额（元）","依据","期间"],
+      "银行余额调节表":["期间","账户","项目","金额（元）","状态或依据"],
+      "余额调节明细":["期间","账户","记录编号","来源","日期","原金额（元）","未达类别","已复核","依据","原文件","源行"],
+      "账龄汇总":["期间","类型","往来单位","未结清（元）",*AGE_BUCKETS,"逾期金额（元）","未到期金额（元）","缺到期日金额（元）","单据数"],
+      "账龄明细":["期间","类型","往来单位","单据编号","记录编号","单据日期","到期日","未结清（元）","账龄天数","账龄区间","逾期天数","状态","原文件","源行"],
       "原始记录":["批次","业务类型","账户","原文件","文件SHA256","工作表","源行","原始行编号","原始字段与内容"],
       "操作记录":["序号","操作","内容"]}
     for name,head in headers.items():sheets[name]=wb.create_sheet(name);_append(sheets[name],head)
@@ -149,11 +157,34 @@ def export_workspace(w,path,cancelled=never_cancel):
     for period,c in s.closings.items():
         for rid in c["outstanding"]:put("期间快照",[period,"当期未达",rid,""])
         for rid,amount in c["open_items"].items():put("期间快照",[period,"往来未结清",rid,format_amount(amount)])
+        for rid,amount in c.get("advances",{}).items():put("期间快照",[period,"预收预付未核销",rid,format_amount(amount)])
         for rid in c["matches"]:put("期间快照",[period,"当期已确认关系",rid,""])
-    for rid,p in s.allocations.items():put("往来核销",[rid,p["cash"],p["item"],format_amount(p["amount_minor"]),p["note"],p["period"]])
+    for rid,p in s.allocations.items():put("往来核销",[rid,p["cash"],p["item"],format_amount(p["amount_minor"]),p["note"],p["period"],format_amount(allocation_net(s,rid)),p.get("advance","")])
     for item in open_items(w):
         r=item["record"];put("往来余额",[r.id,r.role,r.party,r.reference,r.day,format_amount(r.amount_minor),format_amount(item["allocated_minor"]),format_amount(item["remaining_minor"]),item["age_days"],r.due or "",item["overdue_days"] if item["overdue_days"] is not None else "未提供到期日"])
     for rid,p in s.transfers.items():put("内部转账",[rid,p["outgoing"],w.records[p["outgoing"]].account,p["incoming"],w.records[p["incoming"]].account,format_amount(p["amount_minor"]),format_amount(p["fee_minor"]),p["evidence"],p["period"]])
+    for rid,p in s.refunds.items():put("退款冲销",[rid,p["original"],p["cash"],format_amount(p["amount_minor"]),p["category"],p["allocation"],p["advance"],p["evidence"],p["period"]])
+    for p in advance_rows(w):put("预收预付余额",[p["id"],p["kind"],p["cash"],p["party"],format_amount(p["amount_minor"]),format_amount(p["remaining_minor"]),p["evidence"],p["period"]])
+    periods=[p for p in sorted(s.closings) if "aging" in s.closings[p]]
+    if s.period not in periods:periods.append(s.period)
+    for period in periods:
+        if period in s.closings:
+            statements=s.closings[period].get("bank_statements",{}).values()
+        else:statements=[bank_statement(w,a.code) for a in w.accounts]
+        for report in statements:
+            account=report["account"]
+            for label,key in (("银行期末余额","bank_minor"),("账面期末余额","ledger_minor"),("银行调节后余额","bank_adjusted_minor"),("账面调节后余额","ledger_adjusted_minor"),("调节后差额","difference_minor")):
+                value=report[key];put("银行余额调节表",[period,account,label,format_amount(value) if value is not None else "未录入",report["status"]+" / "+report["evidence"]])
+            for category,amount in report["totals"].items():put("银行余额调节表",[period,account,category,format_amount(amount),"仅计入已复核未达项目"])
+            put("银行余额调节表",[period,account,"待复核项目数",report["unreviewed_count"],report["status"]])
+            for item in report["items"]:
+                r=w.records[item["record_id"]];b=batches[r.batch_id];raw=source_rows[b.id][r.source_id]
+                put("余额调节明细",[period,account,r.id,r.role,r.day,format_amount(r.amount_minor),item["category"],"是" if item["reviewed"] else "否",item["evidence"],b.raw.filename,raw.source_line])
+        report=aging_report(w,period)
+        for g in report["groups"]:put("账龄汇总",[period,g["role"],g["party"],format_amount(g["remaining_minor"]),*[format_amount(g["buckets"][k]) for k in AGE_BUCKETS],format_amount(g["overdue_minor"]),format_amount(g["not_due_minor"]),format_amount(g["due_missing_minor"]),g["count"]])
+        for item in report["details"]:
+            r=w.records[item["record_id"]];b=batches[r.batch_id];raw=source_rows[b.id][r.source_id]
+            put("账龄明细",[period,r.role,r.party,r.reference,r.id,r.day,item["due"],format_amount(item["remaining_minor"]),item["age_days"],item["bucket"],item["overdue_days"] if item["overdue_days"] is not None else "未提供",item["status"],b.raw.filename,raw.source_line])
     for b in w.batches:
         for n,r in enumerate(b.raw.rows):
             if n%250==0:check_cancel(cancelled)

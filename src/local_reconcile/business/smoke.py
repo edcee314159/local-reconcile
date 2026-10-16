@@ -28,5 +28,31 @@ def run_business_smoke(output):
     result={"data":"synthetic","combination_relations":len(w.state.matches),"difference_explanations":len(w.state.explanations),
             "remaining_receivable_minor":next(i["remaining_minor"] for i in open_items(w) if i["record"].role=="receivable"),
             "internal_transfers":len(w.state.transfers),"closed_periods":len(w.state.closings)}
+    result.update(_run_settlement_smoke(output))
+    from .reporting_smoke import run_reporting_smoke
+    result.update(run_reporting_smoke(output))
     (output/"business-smoke.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     return result
+
+
+def _run_settlement_smoke(output):
+    from .settlements import advance_rows
+    w=make_demo();rows=list(w.records.values())
+    def find(role,reference):return next(r.id for r in rows if r.role==role and r.reference==reference)
+    c=next(c for c in suggest_matches(w).candidates if len(c.left)>1 and len(c.right)>1)
+    w=record_event(w,"confirm_match",left=c.left,right=c.right,note="虚构多对多结算依据")
+    original=find("bank","ORIG-08");item=find("receivable","INV-08")
+    w=record_event(w,"allocate",cash=original,item=item,amount_minor=10000,note="虚构原核销")
+    allocation=next(iter(w.state.allocations))
+    w=record_event(w,"refund",original=original,cash=find("bank","REFUND-08"),amount_minor=3000,category="退款",evidence="虚构退款回单",allocation=allocation)
+    prepaid=find("bank","PREPAY-09")
+    w=record_event(w,"register_advance",cash=prepaid,amount_minor=10000,evidence="虚构预付协议")
+    advance=next(iter(w.state.advances))
+    w=record_event(w,"allocate_advance",advance=advance,item=find("payable","INV-09"),amount_minor=6000,note="虚构到货结算")
+    w=record_event(w,"refund",original=prepaid,cash=find("bank","REFUND-09"),amount_minor=3000,category="退款",evidence="虚构预付款退回",advance=advance)
+    path=output/"settlement-demo.lrwork";save_workspace(w,path);restored=load_workspace(path)
+    if restored.state!=w.state:raise RuntimeError("settlement replay mismatch")
+    export_workspace(restored,output/"settlement-report.xlsx")
+    return {"many_to_many_relations":len(w.state.matches),"refunds":len(w.state.refunds),
+            "advance_remaining_minor":advance_rows(w)[0]["remaining_minor"],
+            "reopened_receivable_minor":next(i["remaining_minor"] for i in open_items(w) if i["record"].id==item)}

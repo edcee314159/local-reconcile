@@ -1,5 +1,6 @@
 from .workspace import active_records, _used, period_end
 from ..domain import check_cancel, never_cancel
+from .settlements import item_used, cash_free, occupied_settlements
 
 def outstanding(w):
     s=w.state;matched=_used(s.matches);end=period_end(s.period)
@@ -8,15 +9,13 @@ def outstanding(w):
 
 def open_items(w):
     end=period_end(w.state.period)
-    return [{"record":r,"allocated_minor":sum(p["amount_minor"] for p in w.state.allocations.values() if p["item"]==r.id),
-             "remaining_minor":r.amount_minor-sum(p["amount_minor"] for p in w.state.allocations.values() if p["item"]==r.id),
+    return [{"record":r,"allocated_minor":item_used(w.state,r.id),
+             "remaining_minor":r.amount_minor-item_used(w.state,r.id),
              "age_days":(end-r.day).days,"overdue_days":max(0,(end-r.due).days) if r.due else None}
             for r in active_records(w).values() if r.role in ("receivable","payable")]
 
 def cash_remaining(w,rid):
-    r=w.records[rid]
-    if any(rid in (p["outgoing"],p["incoming"]) for p in w.state.transfers.values()):return 0
-    return abs(r.amount_minor)-sum(p["amount_minor"] for p in w.state.allocations.values() if p["cash"]==rid)
+    return cash_free(w,w.state,rid)
 
 def suggest_allocations(w,cancelled=never_cancel):
     from collections import defaultdict
@@ -42,7 +41,7 @@ def suggest_transfers(w,cancelled=never_cancel):
     from collections import defaultdict
     incoming=defaultdict(list);result=[]
     records=active_records(w);occupied={x for p in w.state.transfers.values() for x in (p["outgoing"],p["incoming"])}
-    allocated={p["cash"] for p in w.state.allocations.values()}
+    allocated={p["cash"] for p in w.state.allocations.values()}|occupied_settlements(w.state)
     for r in records.values():
         if r.role=="bank" and r.amount_minor>0 and r.id not in occupied|allocated:incoming[r.amount_minor].append(r)
     for out in records.values():
