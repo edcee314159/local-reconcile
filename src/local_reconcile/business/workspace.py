@@ -125,7 +125,6 @@ def _used(relations):
 
 def _match_data(w,s,data,active):
     left=_ids(data.get("left"),w.records,active);right=_ids(data.get("right"),w.records,active)
-    if len(left)>1 and len(right)>1:fail("本版组合支持一对多或多对一")
     rows=[w.records[i] for i in left+right]
     if any(w.records[i].role!="bank" for i in left) or any(w.records[i].role!="ledger" for i in right):fail("对账两侧必须分别为银行流水和日记账")
     if len({r.account for r in rows})!=1:fail("跨账户记录不能确认为账面相符")
@@ -138,6 +137,8 @@ def _match_data(w,s,data,active):
     return {"left":left,"right":right,"amount_minor":a,"basis":basis,"conflicts":conflicts,"note":note,"period":s.period}
 
 def replay(w):
+    from .settlements import apply_settlement, validate_balances, item_used, cash_free, occupied_settlements, advance_remaining
+    from .reporting import apply_reporting, bank_statement, aging_report
     period_end(w.start_period)
     settings=asdict(w.settings)
     bounds={"window_days":(0,31),"max_parts":(2,5),"max_pool":(1,16),"max_candidates":(1,100),"project_budget":(1,200000),"anchor_budget":(1,10000)}
@@ -148,9 +149,14 @@ def replay(w):
       "import_batch":{"batch"},"confirm_match":{"left","right","note"},"reject_match":{"left","right","note"},
       "undo_match":{"target","note"},"undo_reject":{"left","right","note"},
       "explain":{"bank","ledger","category","evidence"},"undo_explain":{"target","note"},
+      "register_advance":{"cash","amount_minor","evidence"},"allocate_advance":{"advance","item","amount_minor","note"},
+      "refund":{"original","cash","amount_minor","category","evidence","allocation","advance"},
+      "undo_refund":{"target","note"},"undo_advance":{"target","note"},
       "allocate":{"cash","item","amount_minor","note"},"undo_allocate":{"target","note"},
       "confirm_transfer":{"outgoing","incoming","fee_minor","evidence"},"undo_transfer":{"target","note"},
-      "close_period":set(),"advance_period":{"period"},"exclude":{"row","note"},"undo_exclude":{"row","note"}}
+      "set_closing_balances":{"account","bank_minor","ledger_minor","evidence"},
+      "classify_unreconciled":{"row","category","evidence"},"unclassify_unreconciled":{"row","note"},
+      "close_period":{"accounts"},"advance_period":{"period"},"exclude":{"row","note"},"undo_exclude":{"row","note"}}
     for expected,e in enumerate(w.events,1):
         if type(e.seq) is not int or e.seq!=expected or e.kind not in allowed or type(e.data) is not dict:fail("操作记录类型或序号无效")
         d=e.data
@@ -168,6 +174,10 @@ def replay(w):
             new=[r for r in w.records.values() if r.batch_id==b.id]
             if s.closings and any(r.day<=period_end(max(s.closings)) for r in new):fail("来源包含已结账期间记录；请另建修订工作区")
             s.visible.update(r.id for r in new);imported.add(b.id)
+        elif e.kind in ("set_closing_balances","classify_unreconciled","unclassify_unreconciled"):
+            apply_reporting(w,s,e,active)
+        elif e.kind in ("register_advance","allocate_advance","refund","undo_refund","undo_advance"):
+            apply_settlement(w,s,e,active)
         elif e.kind in ("confirm_match","reject_match"):
             p=_match_data(w,s,d,active);key=p["left"],p["right"]
             if e.kind=="confirm_match":
@@ -184,6 +194,7 @@ def replay(w):
             group={"undo_match":s.matches,"undo_explain":s.explanations,"undo_allocate":s.allocations,"undo_transfer":s.transfers}[e.kind]
             target=d.get("target")
             if target not in group:fail("该操作已经撤销或不存在")
+            if e.kind=="undo_allocate" and any(p.get("allocation")==target for p in s.refunds.values()):fail("请先撤销关联退款")
             _note(d);del group[target]
         elif e.kind=="explain":
             b,l=active.get(d.get("bank")),active.get(d.get("ledger"))
@@ -203,9 +214,8 @@ def replay(w):
             if (cash.amount_minor>0)!=(item.role=="receivable") or not cash.amount_minor:fail("收入只能核销应收，支出只能核销应付")
             if any(cash.id in (p["outgoing"],p["incoming"]) for p in s.transfers.values()):fail("内部转账不能用于往来款核销")
             note=_note(d,required=not cash.party or cash.party!=item.party)
-            used_cash=sum(p["amount_minor"] for p in s.allocations.values() if p["cash"]==cash.id)
-            used_item=sum(p["amount_minor"] for p in s.allocations.values() if p["item"]==item.id)
-            if amount>abs(cash.amount_minor)-used_cash or amount>item.amount_minor-used_item:fail("分配金额超过收付款可用余额或单据未结清余额")
+            used_item=item_used(s,item.id)
+            if amount>cash_free(w,s,cash.id) or amount>item.amount_minor-used_item:fail("分配金额超过收付款可用余额或单据未结清余额")
             s.allocations[f"allocation-{e.seq}"]={"cash":cash.id,"item":item.id,"amount_minor":amount,"note":note,"period":s.period}
         elif e.kind=="confirm_transfer":
             o,i=active.get(d.get("outgoing")),active.get(d.get("incoming"));fee=_integer(d.get("fee_minor",0))
@@ -214,28 +224,39 @@ def replay(w):
             evidence=_note(d,"evidence",True)
             occupied={x for p in s.transfers.values() for x in (p["outgoing"],p["incoming"])}
             if o.id in occupied or i.id in occupied:fail("记录已参与内部转账关系")
+            if occupied_settlements(s).intersection((o.id,i.id)):fail("已登记预收预付或退款的记录不能再转为内部转账")
             if any(p["cash"] in (o.id,i.id) for p in s.allocations.values()):fail("已用于往来核销的收付款不能再确认为内部转账")
             s.transfers[f"transfer-{e.seq}"]={"outgoing":o.id,"incoming":i.id,"amount_minor":i.amount_minor,"fee_minor":fee,"evidence":evidence,"period":s.period}
         elif e.kind=="close_period":
             matched=_used(s.matches)
             pending=sorted(r.id for r in active.values() if r.role in ("bank","ledger") and r.id not in matched)
-            balances={r.id:r.amount_minor-sum(p["amount_minor"] for p in s.allocations.values() if p["item"]==r.id) for r in active.values() if r.role in ("receivable","payable")}
-            s.closings[s.period]={"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers)}
+            balances={r.id:r.amount_minor-item_used(s,r.id) for r in active.values() if r.role in ("receivable","payable")}
+            account_codes=d.get("accounts")
+            if account_codes is None:
+                # Earlier formats had no account membership at closing; use only evidence visible then.
+                account_codes=sorted({b.account for b in w.batches if b.id in imported and b.role in ("bank","ledger")}|set(s.closing_balances))
+            if not isinstance(account_codes,list) or any(not isinstance(code,str) for code in account_codes) or len(set(account_codes))!=len(account_codes) or not set(account_codes)<={a.code for a in w.accounts}:fail("月末账户范围无效")
+            statements={code:bank_statement(w,code,state=s) for code in account_codes}
+            aging=aging_report(w,state=s)
+            s.closings[s.period]={"bank_statements":statements,"aging":aging,"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers),"advances":{k:advance_remaining(s,k) for k in s.advances},"refunds":sorted(s.refunds)}
         elif e.kind in ("exclude","undo_exclude"):
             rid=d.get("row");_note(d,required=True)
             if rid not in s.visible:fail("来源行不存在")
             if e.kind=="exclude":
                 if rid not in active:fail("来源行当前不可排除")
                 occupied=_used(s.matches)|{x for p in s.transfers.values() for x in (p["outgoing"],p["incoming"])}|{x for p in s.allocations.values() for x in (p["cash"],p["item"])}|{x for p in s.explanations.values() for x in (p["bank"],p["ledger"])}
+                occupied |= occupied_settlements(s)
                 if rid in occupied:fail("请先撤销此记录参与的业务操作")
                 s.excluded.add(rid)
             else:
                 if rid not in s.excluded:fail("此记录未排除")
                 s.excluded.remove(rid)
+        validate_balances(w,s)
     if imported!=set(batches):fail("工作区包含未经导入事件登记的来源")
     return s
 
 def record_event(w,kind,**data):
+    if kind=="close_period" and "accounts" not in data:data["accounts"]=[a.code for a in w.accounts]
     try:data=json.loads(json.dumps(data,ensure_ascii=False,allow_nan=False))
     except (ValueError,TypeError):fail("操作内容格式无效")
     updated=replace(w,events=w.events+(Event(len(w.events)+1,kind,data),))

@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
         root=QWidget();root.setObjectName("root");self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         sidebar=QFrame();sidebar.setObjectName("sidebar");sidebar.setFixedWidth(208);side=QVBoxLayout(sidebar);side.setContentsMargins(21,32,21,24);side.setSpacing(12)
         brand=QLabel("本地对账");brand.setObjectName("brand");side.addWidget(brand)
-        sub=QLabel("LOCAL RECONCILE\n公开测试版  ·  0.2.0");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
+        sub=QLabel("LOCAL RECONCILE\n正式版  ·  0.4.0");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
         self.home_nav=self._nav("工作台首页",lambda:self.go(0));self.import_nav=self._nav("01  导入与字段",lambda:self._edit_import())
         self.results_nav=self._nav("02  核对与复核",lambda:self.go(2));self.results_nav.setEnabled(False)
         for button in (self.home_nav,self.import_nav,self.results_nav):side.addWidget(button)
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         for n,title,text in (("01","确认输入","选择文件、字段和收付方向。\n异常数据在预检中明确列出。"),("02","复核依据","正常候选、歧义和差异分开展示。\n确认、拒绝、撤销都有记录。"),("03","导出归档","一份报告保留原始明细和来源。\n保存项目后随时继续复核。")):
             card=QFrame();card.setObjectName("card");b=QVBoxLayout(card);b.setContentsMargins(22,22,22,22);num=QLabel(n);num.setObjectName("eyebrow");b.addWidget(num);l=QLabel(title);l.setObjectName("cardTitle");b.addWidget(l);l=QLabel(text);l.setObjectName("muted");l.setWordWrap(True);b.addWidget(l);row.addWidget(card)
         layout.addLayout(row)
-        note=QLabel("本版范围：Excel / CSV、单账户人民币、逐笔核对。组合收付款与跨期事项留给人工复核。\n公开测试版已设计合成案例验证；真实企业适用性仍需实际使用反馈。");note.setObjectName("muted");note.setWordWrap(True);layout.addWidget(note);layout.addStretch();return page
+        note=QLabel("逐笔核对支持 Excel / CSV 和单账户人民币。组合对账、往来核销、退款及预收预付款请进入“业务核算”。\n核对建议需人工确认；原始来源与处理依据可追溯。");note.setObjectName("muted");note.setWordWrap(True);layout.addWidget(note);layout.addStretch();return page
     def go(self,index):
         self.stack.setCurrentIndex(index)
         for n,b in enumerate((self.home_nav,self.import_nav,self.results_nav)):b.setChecked(n==index)

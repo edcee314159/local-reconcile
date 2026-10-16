@@ -111,5 +111,66 @@ def suggest_matches(w,progress=quiet_progress,cancelled=never_cancel):
                 if basis=="人工指定":basis="同日同额（弱依据）"
                 cid=stable_id("business-match-2",*left,"/",*right)
                 graph.add(Suggestion(cid,left,right,anchor.amount_minor,basis,conflicts))
+    _many_to_many(w,records,sides,graph,count,cancelled)
     progress("组合对账完成",len(anchors),len(anchors))
     return graph.finish()
+
+
+def _many_to_many(w,records,sides,graph,count,cancelled):
+    """Bounded subset-sum join within shared-reference or compatible same-party groups."""
+    groups=defaultdict(lambda:{"bank":[],"ledger":[]});parties=defaultdict(lambda:defaultdict(list))
+    settings=w.settings
+    for role,rows in sides.items():
+        for r in rows:
+            if not r.amount_minor:continue
+            if r.reference:groups[r.account,r.amount_minor>0,r.reference][role].append(r)
+            if r.party:parties[r.account,r.amount_minor>0,r.party][r.reference].append(r)
+    # Missing identifiers may join a party group, but conflicting nonempty identifiers never mix.
+    extra=[]
+    for buckets in parties.values():
+        empty=buckets.get("",())
+        if not empty:continue
+        if len(empty)>2*settings.max_pool:
+            graph.limited(tuple(r.id for rows in buckets.values() for r in rows),"多对多同单位缺编号记录池超过搜索上限");continue
+        choices=[list(empty)]
+        choices.extend(list(empty)+rows for ref,rows in buckets.items() if ref)
+        for rows in choices:
+            extra.append({role:[r for r in rows if r.role==role] for role in ("bank","ledger")})
+    all_ids=tuple(r.id for rows in sides.values() for r in rows)
+    for group in list(groups.values())+extra:
+        check_cancel(cancelled)
+        banks=sorted(group["bank"],key=lambda r:r.id);ledgers=sorted(group["ledger"],key=lambda r:r.id)
+        if min(len(banks),len(ledgers))<2:continue
+        nodes=tuple(r.id for r in banks+ledgers)
+        if max(len(banks),len(ledgers))>settings.max_pool:
+            graph.limited(nodes,"多对多每侧记录池超过搜索上限，未穷尽匹配");continue
+        used=0;left_sums=defaultdict(list);limited=False
+        for role,rows in (("bank",banks),("ledger",ledgers)):
+            for size in range(2,min(settings.max_parts,len(rows))+1):
+                for parts in combinations(rows,size):
+                    count+=1;used+=1
+                    if count>settings.project_budget:
+                        graph.limited(all_ids,"项目搜索预算已达到上限，未搜索完成");return
+                    if used>settings.anchor_budget:
+                        graph.limited(nodes,"多对多组搜索预算已达到上限");limited=True;break
+                    if count%250==0:check_cancel(cancelled)
+                    if (max(r.day for r in parts)-min(r.day for r in parts)).days>settings.window_days:continue
+                    amount=sum(r.amount_minor for r in parts)
+                    if role=="bank":left_sums[amount].append(parts);continue
+                    for bank_parts in left_sums.get(amount,()):
+                        count+=1;used+=1
+                        if count>settings.project_budget:
+                            graph.limited(all_ids,"项目搜索预算已达到上限，未搜索完成");return
+                        if used>settings.anchor_budget:
+                            graph.limited(nodes,"多对多组搜索预算已达到上限");limited=True;break
+                        if count%250==0:check_cancel(cancelled)
+                        both=bank_parts+parts
+                        if (max(r.day for r in both)-min(r.day for r in both)).days>settings.window_days:continue
+                        left=tuple(r.id for r in bank_parts);right=tuple(r.id for r in parts)
+                        basis,conflicts=relation_basis(records,left,right)
+                        if basis=="人工指定":continue
+                        cid=stable_id("business-match-2",*left,"/",*right)
+                        graph.add(Suggestion(cid,left,right,amount,basis,conflicts))
+                    if limited:break
+                if limited:break
+            if limited:break

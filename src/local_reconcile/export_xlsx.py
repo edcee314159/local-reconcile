@@ -48,7 +48,7 @@ def export_report(snapshot,path,cancelled=never_cancel):
         for label,calc in (("收入合计",lambda t:max(t.amount_minor,0)),("支出合计",lambda t:max(-t.amount_minor,0)),("净额",lambda t:t.amount_minor)):
             add("核对总览",[label,*[_money(sum(calc(t) for t in d.transactions)) for d in (snapshot.bank,snapshot.ledger)]])
         add("核对总览",["已确认净额",*[_money(sum(t.amount_minor for t in d.transactions if states[t.id]=="confirmed")) for d in (snapshot.bank,snapshot.ledger)]])
-        add("核对总览",["口径","人民币；收入正、支出负；候选不计入确认合计","公开测试版，不自动过账"])
+        add("核对总览",["口径","人民币；收入正、支出负；候选不计入确认合计","结果需人工复核，不自动过账"])
         add("核对总览",["原始记录行数",len(br),len(lr)])
         add("核对总览",["日期容差（天）",snapshot.config.date_tolerance_days,"规则版本 "+snapshot.result.rule_version])
         add("已确认关系",["关系编号","银行文件","工作表","源行","银行记录编号","日记账文件","工作表","源行","日记账记录编号","银行日期","日记账日期","银行金额（元）","日记账金额（元）","确认依据"])

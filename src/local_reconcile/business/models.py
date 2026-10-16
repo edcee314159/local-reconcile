@@ -56,6 +56,10 @@ class State:
     explanations: dict = field(default_factory=dict)
     allocations: dict = field(default_factory=dict)
     transfers: dict = field(default_factory=dict)
+    refunds: dict = field(default_factory=dict)
+    advances: dict = field(default_factory=dict)
+    closing_balances: dict = field(default_factory=dict)
+    unreconciled_classes: dict = field(default_factory=dict)
     closings: dict = field(default_factory=dict)
 
 @dataclass(frozen=True)

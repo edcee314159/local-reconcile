@@ -60,3 +60,10 @@ def test_packaged_five_business_workflows(tmp_path):
     assert data["combination_relations"]==1 and data["difference_explanations"]==1
     assert data["remaining_receivable_minor"]==700000
     assert data["internal_transfers"]==1 and data["closed_periods"]==1
+
+    assert data["many_to_many_relations"]==1 and data["refunds"]==2
+    assert data["advance_remaining_minor"]==1000 and data["reopened_receivable_minor"]==3000
+
+    assert data["bank_adjustment_difference_minor"]==0
+    assert data["aging_receivable_minor"]==10000 and data["aging_overdue_minor"]==10000
+    assert data["historical_adjustment_preserved"] is True

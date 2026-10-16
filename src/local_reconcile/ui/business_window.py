@@ -6,6 +6,9 @@ from PySide6.QtWidgets import (QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QForm
  QTabWidget,QTableView,QComboBox,QLineEdit,QDialog,QDialogButtonBox,QCheckBox,QSpinBox,QFileDialog,
  QMessageBox,QInputDialog,QPlainTextEdit,QSplitter,QAbstractItemView)
 from .workers import JobRunner
+from .settlement_pages import SettlementPages
+from .reporting_pages import ReportingPages
+from ..business.settlements import allocation_net
 from .table_models import DataTableModel
 from .results_page import configure_table
 from .import_page import SourcePanel
@@ -37,7 +40,7 @@ def populate(t,headers,rows):
     t.setModel(DataTableModel(headers,rows,t))
     t.resizeColumnsToContents()
 
-class BusinessWindow(QMainWindow):
+class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
     def __init__(self,parent=None):
         super().__init__(parent);self.setWindowTitle("业务核算 · 本地对账工作台");self.resize(1460,960);self.setMinimumSize(1100,780)
         self.workspace=new_workspace();self.analysis=None;self.dirty=False;self.path=None;self.busy=False;self.job_id=0;self.source_signature=None
@@ -51,7 +54,7 @@ class BusinessWindow(QMainWindow):
         layout.addWidget(self.tools)
         self.summary=QLabel();self.summary.setWordWrap(True);self.summary.setObjectName("muted");layout.addWidget(self.summary)
         self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
-        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page()
+        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page();self._refund_page();self._advance_page();self._balance_page();self._aging_page()
         self.detail=QPlainTextEdit();self.detail.setReadOnly(True);self.detail.setMaximumHeight(115);self.detail.setPlaceholderText("选择记录查看原始文件、字段及核实依据。");layout.addWidget(self.detail)
         bottom=QHBoxLayout();self.status=QLabel("本地人民币业务核算 · 结果需人工确认");bottom.addWidget(self.status,1)
         self.legacy_button=button("导入旧版项目",lambda:self.guard(self.legacy_clicked));bottom.addWidget(self.legacy_button)
@@ -76,7 +79,7 @@ class BusinessWindow(QMainWindow):
                    button("手工组合",lambda:self.guard(self.manual_match)))
         self.match_table=table(box)
         self.match_table.clicked.connect(lambda *_:self.match_detail())
-        self.match_hint=QLabel("先登记账户并导入银行、日记账；自动组合支持 2—5 笔，手工支持至 100 笔。");self.match_hint.setWordWrap(True);box.addWidget(self.match_hint)
+        self.match_hint=QLabel("先登记账户并导入银行、日记账；支持一对多、多对多；自动每侧最多5笔，手工每侧最多100笔。");self.match_hint.setWordWrap(True);box.addWidget(self.match_hint)
         horizontal(box,QLabel("已确认对账关系"),button("撤销已确认",lambda:self.guard(self.undo_match)))
         self.confirmed_table=table(box);self.confirmed_table.clicked.connect(lambda *_:self.confirmed_detail())
 
@@ -162,11 +165,13 @@ class BusinessWindow(QMainWindow):
         populate(self.open_item_table,("类型","往来单位","单据编号","原金额（元）","已核销（元）","未结清（元）","账龄（天）","到期日","逾期（天）"),
           [[_NAMES[i["record"].role],i["record"].party,i["record"].reference,format_amount(i["record"].amount_minor),format_amount(i["allocated_minor"]),format_amount(i["remaining_minor"]),i["age_days"],i["record"].due or "",i["overdue_days"] if i["overdue_days"] is not None else "未提供"] for i in self.open_item_rows])
         self.allocation_ids=list(s.allocations)
-        populate(self.allocation_table,("银行收付款","往来单据","核销金额（元）","核实依据","期间"),
-                 [[self.label(p["cash"]),self.label(p["item"]),format_amount(p["amount_minor"]),p["note"],p["period"]] for p in s.allocations.values()])
+        populate(self.allocation_table,("银行收付款","往来单据","原核销金额（元）","退款后净核销（元）","预收预付登记","核实依据","期间"),
+                 [[self.label(p["cash"]),self.label(p["item"]),format_amount(p["amount_minor"]),format_amount(allocation_net(s,k)),p.get("advance",""),p["note"],p["period"]] for k,p in s.allocations.items()])
         self.transfer_ids=list(s.transfers)
         populate(self.transfer_table,("转出记录","转入记录","转入金额（元）","手续费（元）","依据","期间"),
                  [[self.label(p["outgoing"]),self.label(p["incoming"]),format_amount(p["amount_minor"]),format_amount(p["fee_minor"]),p["evidence"],p["period"]] for p in s.transfers.values()])
+        self._refresh_settlements()
+        self._refresh_reporting()
         self.allocation_candidates=();self.transfer_candidates=()
         populate(self.allocation_candidate_table,("候选银行记录","候选单据","建议金额（元）"),[])
         populate(self.transfer_candidate_table,("候选转出","候选转入"),[])
@@ -254,7 +259,7 @@ class BusinessWindow(QMainWindow):
         if self.open_item_rows:self.show_records((self._choose(self.open_item_table,self.open_item_rows)["record"].id,))
 
     def manual_match(self):
-        d=QDialog(self);d.setWindowTitle("手工指定组合 · 一侧一笔，另一侧最多100笔");d.resize(1100,700);box=QVBoxLayout(d)
+        d=QDialog(self);d.setWindowTitle("手工指定组合 · 每侧最多100笔，合计相等且方向一致");d.resize(1100,700);box=QVBoxLayout(d)
         banks=[r for r in active_records(self.workspace).values() if r.role=="bank"];ledgers=[r for r in active_records(self.workspace).values() if r.role=="ledger"]
         left=table(box);right=table(box)
         for t,rows in ((left,banks),(right,ledgers)):
@@ -375,7 +380,11 @@ class BusinessWindow(QMainWindow):
 
     def demo_clicked(self):
         if not self.discard_ok():return
-        self._run(lambda progress,cancelled:make_demo(),lambda w:(self.set_workspace(w),setattr(self,"dirty",True),setattr(self,"path",None),self.status.setText("已载入五项业务的虚构案例，请点击分析候选。")))
+        choice,ok=QInputDialog.getItem(self,"载入虚构示例","选择示例：",["综合业务（含退款、预收预付、账龄）","月末余额调节与逾期分析"],0,False)
+        if not ok:return
+        from ..business.reporting_smoke import reporting_demo
+        factory=reporting_demo if choice.startswith("月末") else make_demo
+        self._run(lambda progress,cancelled:factory(),lambda w:(self.set_workspace(w),setattr(self,"dirty",True),setattr(self,"path",None),self.status.setText("已载入虚构示例，可进入相应业务页复核。")))
 
     def save_to(self,path,close_after=False):
         w=self.workspace
@@ -412,7 +421,7 @@ class BusinessWindow(QMainWindow):
         self._run(work,done)
 
     def export_to(self,path):
-        w=self.workspace;self._run(lambda progress,cancelled:export_workspace(w,path,cancelled),lambda _:self.status.setText("核算报告已导出，包含对账、差额、未达、核销、转账与原始记录"))
+        w=self.workspace;self._run(lambda progress,cancelled:export_workspace(w,path,cancelled),lambda _:self.status.setText("核算报告已导出，包含对账、差额、未达、核销、转账、退款、预收预付与原始记录"))
 
     def export_clicked(self):
         path,_=QFileDialog.getSaveFileName(self,"导出业务核算报告","业务核算报告.xlsx","Excel (*.xlsx)")

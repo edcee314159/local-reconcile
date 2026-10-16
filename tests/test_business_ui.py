@@ -13,7 +13,7 @@ def test_five_business_tabs_and_real_workflow(app,tmp_path):
     w=BusinessWindow();w.show()
     try:
         w.set_workspace(make_demo())
-        assert w.tabs.count()==5
+        assert w.tabs.count()==9
         w.analyze();wait_until(app,lambda:not w.busy)
         assert w.analysis and w.analysis.candidates
         w.match_table.selectRow(0)
@@ -47,7 +47,7 @@ def test_business_main_entry_and_all_business_actions(app):
     main=MainWindow();QTest.mouseClick(main.business_button,Qt.LeftButton)
     w=main.business_window
     try:
-        assert w is not None and w.tabs.count()==5
+        assert w is not None and w.tabs.count()==9
         w.set_workspace(make_demo())
         records=list(w.workspace.records.values())
         bank=next(r for r in records if r.role=="bank" and r.reference=="SET-02")
