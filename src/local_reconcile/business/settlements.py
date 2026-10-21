@@ -19,8 +19,14 @@ def cash_free(w,s,rid):
     used+=sum(p["amount_minor"] for p in s.refunds.values() if p["original"]==rid or p["cash"]==rid)
     return abs(w.records[rid].amount_minor)-used
 
-def item_used(s,rid):
+def item_cash_used(s,rid):
     return sum(allocation_net(s,k) for k,p in s.allocations.items() if p["item"]==rid)
+
+def item_credit_used(s,rid):
+    return sum(p["amount_minor"] for p in s.credits.values() if p["item"]==rid)
+
+def item_used(s,rid):
+    return item_cash_used(s,rid)+item_credit_used(s,rid)
 
 def advance_rows(w):
     s=w.state
@@ -34,7 +40,7 @@ def validate_balances(w,s):
     touched={p["cash"] for p in s.allocations.values()}|occupied_settlements(s)
     if any(cash_free(w,s,rid)<0 for rid in touched):fail("操作导致收付款可用余额不足，请先撤销后续处理")
     if any(advance_remaining(s,k)<0 for k in s.advances):fail("操作导致预收预付款余额不足")
-    for rid in {p["item"] for p in s.allocations.values()}:
+    for rid in {p["item"] for p in s.allocations.values()}|{p["item"] for p in s.credits.values()}:
         amount=item_used(s,rid)
         if not 0<=amount<=w.records[rid].amount_minor:fail("操作导致单据超额核销，请先撤销后续核销")
 

@@ -6,6 +6,9 @@ from .models import Account,Batch,Settings,Event,Workspace
 from .workspace import new_workspace,add_account,add_batch,record_event,replay,period_end,active_records,fail
 from .operations import open_items,outstanding
 from .settlements import advance_rows, allocation_net
+from .credits import credit_rows
+from .duplicates import duplicate_groups
+from .counterparty import counterparty_report
 from .reporting import bank_statement,aging_report,AGE_BUCKETS,TIMING_CATEGORIES
 from ..project_store import _encode,_decode,validate_snapshot
 from ..amounts import format_amount
@@ -37,6 +40,7 @@ def save_workspace(w,path,cancelled=never_cancel):
     batches=[]
     for b in w.batches:
         body={"id":b.id,"role":b.role,"account":b.account,"raw":_encode(b.raw),"mapping":_encode(b.mapping),"due_col":b.due_col}
+        if b.statement_period is not None:body["statement_period"]=b.statement_period
         batches.append({**body,"payload_sha256":sha256(_canonical(body)).hexdigest()})
     data={"version":2,"start_period":w.start_period,"accounts":[asdict(a) for a in w.accounts],
           "settings":asdict(w.settings),"batches":batches,"events":[asdict(e) for e in w.events]}
@@ -60,10 +64,10 @@ def load_workspace(path):
             w=add_account(w,**a)
         batches=[]
         for b in d["batches"]:
-            if type(b) is not dict or set(b)!={"id","role","account","raw","mapping","due_col","payload_sha256"}:fail("来源字段无效")
+            if type(b) is not dict or set(b)-{"statement_period"}!={"id","role","account","raw","mapping","due_col","payload_sha256"}:fail("来源字段无效")
             body={k:v for k,v in b.items() if k!="payload_sha256"}
             if sha256(_canonical(body)).hexdigest()!=b["payload_sha256"]:fail("来源内容校验失败")
-            batches.append(Batch(b["id"],b["role"],b["account"],_decode(b["raw"]),_decode(b["mapping"]),b["due_col"]))
+            batches.append(Batch(b["id"],b["role"],b["account"],_decode(b["raw"]),_decode(b["mapping"]),b["due_col"],b.get("statement_period")))
         if type(d["events"]) is not list or len(d["events"])>200000:fail("操作记录超过限制")
         events=[]
         for e in d["events"]:
@@ -110,15 +114,20 @@ def export_workspace(w,path,cancelled=never_cancel):
       "未达明细":["记录编号","来源","账户","日期","金额（元）","对方","编号","账龄天数","已有差额说明"],
       "期间快照":["期间","类型","记录或关系编号","余额（元）"],
       "往来核销":["核销编号","银行记录","往来单据记录","原核销金额（元）","依据","期间","退款后净核销（元）","预收预付登记"],
-      "往来余额":["记录编号","类型","往来单位","单据编号","单据日期","单据金额（元）","已核销（元）","未结清（元）","账龄天数","到期日","逾期天数"],
+      "往来余额":["记录编号","类型","往来单位","单据编号","单据日期","单据金额（元）","资金净核销（元）","红字抵减（元）","未结清（元）","账龄天数","到期日","逾期天数"],
       "内部转账":["关系编号","转出记录","转出账户","转入记录","转入账户","转入金额（元）","手续费（元）","依据","期间"],
       "退款冲销":["关系编号","原银行记录","退款流水","金额（元）","类别","关联核销","关联预收预付","依据","期间"],
       "预收预付余额":["登记编号","类型","银行记录","往来单位","原登记金额（元）","未核销余额（元）","依据","期间"],
       "银行余额调节表":["期间","账户","项目","金额（元）","状态或依据"],
       "余额调节明细":["期间","账户","记录编号","来源","日期","原金额（元）","未达类别","已复核","依据","原文件","源行"],
       "账龄汇总":["期间","类型","往来单位","未结清（元）",*AGE_BUCKETS,"逾期金额（元）","未到期金额（元）","缺到期日金额（元）","单据数"],
-      "账龄明细":["期间","类型","往来单位","单据编号","记录编号","单据日期","到期日","未结清（元）","账龄天数","账龄区间","逾期天数","状态","原文件","源行"],
+      "账龄明细":["期间","类型","往来单位","单据编号","记录编号","单据日期","到期日","资金净核销（元）","红字抵减（元）","未结清（元）","账龄天数","账龄区间","逾期天数","状态","原文件","源行"],
       "原始记录":["批次","业务类型","账户","原文件","文件SHA256","工作表","源行","原始行编号","原始字段与内容"],
+      "红字抵减":["操作编号","红字记录","原单据记录","抵减金额（元）","类别","依据","期间"],
+      "红字可用余额":["记录编号","类型","往来单位","红字编号","原金额（元）","已抵减（元）","可用余额（元）"],
+      "疑似重复交易":["期间","组编号","状态","判定条件","记录编号","来源类别","账户","日期","金额（元）","往来单位","编号","原文件","源行","复核依据"],
+      "双方往来对账汇总":["期间","对账单批次","往来单位","方向","截止日","我方未结（元）","对方未结（元）","差额（元）","已确认行数","已说明差异行数","待复核行数","对账单依据"],
+      "双方往来对账明细":["期间","对账单批次","单据编号","我方记录","对方记录","我方未结（元）","对方未结（元）","差额（元）","状态","复核依据"],
       "操作记录":["序号","操作","内容"]}
     for name,head in headers.items():sheets[name]=wb.create_sheet(name);_append(sheets[name],head)
     def put(name,row):_append(sheets[name],row)
@@ -158,10 +167,11 @@ def export_workspace(w,path,cancelled=never_cancel):
         for rid in c["outstanding"]:put("期间快照",[period,"当期未达",rid,""])
         for rid,amount in c["open_items"].items():put("期间快照",[period,"往来未结清",rid,format_amount(amount)])
         for rid,amount in c.get("advances",{}).items():put("期间快照",[period,"预收预付未核销",rid,format_amount(amount)])
+        for rid,amount in c.get("credit_balances",{}).items():put("期间快照",[period,"红字可用余额",rid,format_amount(amount)])
         for rid in c["matches"]:put("期间快照",[period,"当期已确认关系",rid,""])
     for rid,p in s.allocations.items():put("往来核销",[rid,p["cash"],p["item"],format_amount(p["amount_minor"]),p["note"],p["period"],format_amount(allocation_net(s,rid)),p.get("advance","")])
     for item in open_items(w):
-        r=item["record"];put("往来余额",[r.id,r.role,r.party,r.reference,r.day,format_amount(r.amount_minor),format_amount(item["allocated_minor"]),format_amount(item["remaining_minor"]),item["age_days"],r.due or "",item["overdue_days"] if item["overdue_days"] is not None else "未提供到期日"])
+        r=item["record"];put("往来余额",[r.id,r.role,r.party,r.reference,r.day,format_amount(r.amount_minor),format_amount(item["allocated_minor"]),format_amount(item["credited_minor"]),format_amount(item["remaining_minor"]),item["age_days"],r.due or "",item["overdue_days"] if item["overdue_days"] is not None else "未提供到期日"])
     for rid,p in s.transfers.items():put("内部转账",[rid,p["outgoing"],w.records[p["outgoing"]].account,p["incoming"],w.records[p["incoming"]].account,format_amount(p["amount_minor"]),format_amount(p["fee_minor"]),p["evidence"],p["period"]])
     for rid,p in s.refunds.items():put("退款冲销",[rid,p["original"],p["cash"],format_amount(p["amount_minor"]),p["category"],p["allocation"],p["advance"],p["evidence"],p["period"]])
     for p in advance_rows(w):put("预收预付余额",[p["id"],p["kind"],p["cash"],p["party"],format_amount(p["amount_minor"]),format_amount(p["remaining_minor"]),p["evidence"],p["period"]])
@@ -184,7 +194,24 @@ def export_workspace(w,path,cancelled=never_cancel):
         for g in report["groups"]:put("账龄汇总",[period,g["role"],g["party"],format_amount(g["remaining_minor"]),*[format_amount(g["buckets"][k]) for k in AGE_BUCKETS],format_amount(g["overdue_minor"]),format_amount(g["not_due_minor"]),format_amount(g["due_missing_minor"]),g["count"]])
         for item in report["details"]:
             r=w.records[item["record_id"]];b=batches[r.batch_id];raw=source_rows[b.id][r.source_id]
-            put("账龄明细",[period,r.role,r.party,r.reference,r.id,r.day,item["due"],format_amount(item["remaining_minor"]),item["age_days"],item["bucket"],item["overdue_days"] if item["overdue_days"] is not None else "未提供",item["status"],b.raw.filename,raw.source_line])
+            put("账龄明细",[period,r.role,r.party,r.reference,r.id,r.day,item["due"],format_amount(item["allocated_minor"]),format_amount(item.get("credited_minor",0)),format_amount(item["remaining_minor"]),item["age_days"],item["bucket"],item["overdue_days"] if item["overdue_days"] is not None else "未提供",item["status"],b.raw.filename,raw.source_line])
+    for rid,p in s.credits.items():put("红字抵减",[rid,p["credit"],p["item"],format_amount(p["amount_minor"]),p["category"],p["evidence"],p["period"]])
+    for p in credit_rows(w):put("红字可用余额",[p["id"],p["role"],p["party"],p["reference"],format_amount(p["amount_minor"]),format_amount(p["applied_minor"]),format_amount(p["remaining_minor"])])
+    duplicate_periods={p:c.get("duplicate_groups",[]) for p,c in s.closings.items()}
+    if s.period not in duplicate_periods:duplicate_periods[s.period]=duplicate_groups(w,s)
+    for period,groups in duplicate_periods.items():
+        for g in groups:
+            check_cancel(cancelled)
+            for rid in g["rows"]:
+                r=w.records[rid];b=batches[r.batch_id];raw=source_rows[b.id][r.source_id]
+                put("疑似重复交易",[period,g["id"],g["status"],g["basis"],rid,r.role,r.account,r.day,format_amount(r.amount_minor),r.party,r.reference,b.raw.filename,raw.source_line,g["evidence"]])
+    partner_reports=[r for c in s.closings.values() for r in c.get("partner_reports",{}).values()]
+    if s.period not in s.closings:
+        partner_reports.extend(counterparty_report(w,bid,state=s) for bid,p in s.partner_statements.items() if p["as_of"]==period_end(s.period).isoformat())
+    for r in partner_reports:
+        check_cancel(cancelled)
+        put("双方往来对账汇总",[r["period"],r["batch"],r["party"],r["role"],r["as_of"],format_amount(r["own_total_minor"]),format_amount(r["partner_total_minor"]),format_amount(r["difference_minor"]),r["confirmed_count"],r["explained_count"],r["unreviewed_count"],r["evidence"]])
+        for p in r["rows"]:put("双方往来对账明细",[r["period"],r["batch"],p["reference"],p["own"],p["partner"],format_amount(p["own_minor"]) if p["own_minor"] is not None else "缺单",format_amount(p["partner_minor"]) if p["partner_minor"] is not None else "缺单",format_amount(p["difference_minor"]),p["status"],p["evidence"]])
     for b in w.batches:
         for n,r in enumerate(b.raw.rows):
             if n%250==0:check_cancel(cancelled)

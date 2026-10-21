@@ -67,3 +67,7 @@ def test_packaged_five_business_workflows(tmp_path):
     assert data["bank_adjustment_difference_minor"]==0
     assert data["aging_receivable_minor"]==10000 and data["aging_overdue_minor"]==10000
     assert data["historical_adjustment_preserved"] is True
+    assert data["credit_receivable_remaining_minor"]==8000 and data["credit_payable_remaining_minor"]==15000
+    assert data["duplicate_use_blocked"] is True and data["duplicate_groups_after_exclusion"]==0
+    assert data["partner_confirmed_rows"]==1 and data["partner_explained_rows"]==3
+    assert data["partner_history_preserved"] is True

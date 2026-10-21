@@ -16,6 +16,7 @@ from ..review import apply_review,confirm_batch
 from ..project_store import save_project,load_project
 from ..export_xlsx import export_report
 from ..amounts import format_amount
+from .. import __version__
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -25,7 +26,7 @@ class MainWindow(QMainWindow):
         root=QWidget();root.setObjectName("root");self.setCentralWidget(root);outer=QHBoxLayout(root);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         sidebar=QFrame();sidebar.setObjectName("sidebar");sidebar.setFixedWidth(208);side=QVBoxLayout(sidebar);side.setContentsMargins(21,32,21,24);side.setSpacing(12)
         brand=QLabel("本地对账");brand.setObjectName("brand");side.addWidget(brand)
-        sub=QLabel("LOCAL RECONCILE\n正式版  ·  0.4.1");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
+        sub=QLabel(f"LOCAL RECONCILE\n正式版  ·  {__version__}");sub.setObjectName("sideSub");side.addWidget(sub);side.addSpacing(30)
         self.home_nav=self._nav("工作台首页",lambda:self.go(0));self.import_nav=self._nav("01  导入与字段",lambda:self._edit_import())
         self.results_nav=self._nav("02  核对与复核",lambda:self.go(2));self.results_nav.setEnabled(False)
         for button in (self.home_nav,self.import_nav,self.results_nav):side.addWidget(button)
