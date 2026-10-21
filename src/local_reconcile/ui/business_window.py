@@ -211,7 +211,7 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
         self.runner.submit(self.job_id,work,finish,error)
 
     def cancel(self):
-        self.runner.cancel(self.job_id);self.busy=False;self.tools.setEnabled(True);self.tabs.setEnabled(True);self.legacy_button.setEnabled(True);self.cancel_button.hide();self.status.setText("任务已取消，保留上次完整工作区")
+        self.runner.cancel(self.job_id);self.busy=False;self.tools.setEnabled(True);self.tabs.setEnabled(True);self.legacy_button.setEnabled(True);self.cancel_button.hide();self.status.setText("已请求取消；后台退出后执行后续任务，当前工作区保留")
 
     def analyze(self):
         w=self.workspace
