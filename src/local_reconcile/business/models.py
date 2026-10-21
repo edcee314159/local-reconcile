@@ -16,6 +16,7 @@ class Batch:
     raw: RawTable
     mapping: MappingSpec
     due_col: int | None = None
+    statement_period: str | None = None
 
 @dataclass(frozen=True)
 class Record:
@@ -60,6 +61,11 @@ class State:
     advances: dict = field(default_factory=dict)
     closing_balances: dict = field(default_factory=dict)
     unreconciled_classes: dict = field(default_factory=dict)
+    balance_revisions: dict = field(default_factory=dict)
+    credits: dict = field(default_factory=dict)
+    duplicate_decisions: dict = field(default_factory=dict)
+    partner_statements: dict = field(default_factory=dict)
+    partner_decisions: dict = field(default_factory=dict)
     closings: dict = field(default_factory=dict)
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 from .workspace import active_records, _used, period_end
 from ..domain import check_cancel, never_cancel
-from .settlements import item_used, cash_free, occupied_settlements
+from .settlements import item_used, item_cash_used, item_credit_used, cash_free, occupied_settlements
 
 def outstanding(w):
     s=w.state;matched=_used(s.matches);end=period_end(s.period)
@@ -9,7 +9,7 @@ def outstanding(w):
 
 def open_items(w):
     end=period_end(w.state.period)
-    return [{"record":r,"allocated_minor":item_used(w.state,r.id),
+    return [{"record":r,"allocated_minor":item_cash_used(w.state,r.id),"credited_minor":item_credit_used(w.state,r.id),
              "remaining_minor":r.amount_minor-item_used(w.state,r.id),
              "age_days":(end-r.day).days,"overdue_days":max(0,(end-r.due).days) if r.due else None}
             for r in active_records(w).values() if r.role in ("receivable","payable")]

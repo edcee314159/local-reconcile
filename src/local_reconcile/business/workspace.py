@@ -8,7 +8,7 @@ from ..normalize import normalize, _value
 from ..dates import parse_date
 from ..matching import stable_id
 
-ROLES = ("bank", "ledger", "receivable", "payable")
+ROLES = ("bank", "ledger", "receivable", "payable", "receivable_credit", "payable_credit", "partner_receivable", "partner_payable")
 CATEGORIES = ("手续费", "折扣", "退款", "其他", "待查")
 
 def fail(message):
@@ -54,12 +54,14 @@ def _batch_records(batch):
     for t in ds.transactions:
         if batch.role in ("receivable","payable"):
             if t.amount_minor<=0 or not t.party or not t.reference:fail("应收应付须提供正数单据金额、往来单位和唯一单据编号")
+        if batch.role in ("receivable_credit","payable_credit") and (not t.amount_minor or not t.party or not t.reference):fail("红字退货折让须提供非零金额、往来单位和唯一单据编号")
+        if batch.role in ("partner_receivable","partner_payable") and (t.amount_minor<0 or not t.party or not t.reference):fail("对方对账单须提供非负未结余额、往来单位和单据编号")
         due=None
         if batch.due_col is not None:
             value=_value(rows[t.id],batch.due_col)
             if value not in (None,""):due=parse_date(value,m.date_format,raw.excel_epoch)
         result.append(Record(stable_id("business-row",batch.id,t.id),batch.id,t.id,batch.role,batch.account,
-                             t.day,t.amount_minor,t.party,t.reference,t.summary,due))
+                             t.day,abs(t.amount_minor) if batch.role in ("receivable_credit","payable_credit") else t.amount_minor,t.party,t.reference,t.summary,due))
     return result
 
 def build_records(w):
@@ -70,11 +72,20 @@ def build_records(w):
     for b in w.batches:
         if b.id in batch_ids:fail("来源批次重复")
         batch_ids.add(b.id)
-        if b.id!=stable_id("batch",b.role,b.account,b.raw.sha256,b.raw.sheet,b.raw.header_row):fail("来源批次标识不一致")
+        suffix=()
+        if b.statement_period is not None:
+            if b.role not in ("partner_receivable","partner_payable"):fail("只有对方月末对账单允许单独记录所属月份")
+            period_end(b.statement_period);suffix=(b.statement_period,)
+        if b.id!=stable_id("batch",b.role,b.account,b.raw.sha256,b.raw.sheet,b.raw.header_row,*suffix):fail("来源批次标识不一致")
         if b.role in ("bank","ledger") and b.account not in account_ids:fail("来源账户未登记为本企业人民币账户")
+        batch_invoices=set()
         for r in _batch_records(b):
             if r.id in records:fail("来源记录重复")
-            if r.role in ("receivable","payable"):
+            if r.role in ("partner_receivable","partner_payable"):
+                key=r.party,r.reference
+                if key in batch_invoices:fail("对方对账单同一单位同一编号只能有一行未结余额")
+                batch_invoices.add(key)
+            if r.role in ("receivable","payable","receivable_credit","payable_credit"):
                 key=r.role,r.party,r.reference
                 if key in invoices:fail("同一往来单位的单据编号重复；请先整理为一张单据一行，已有单据不要再次导入")
                 invoices.add(key)
@@ -83,9 +94,11 @@ def build_records(w):
     return records
 
 def add_batch(w,role,account,raw,mapping,due_col=None):
-    bid=stable_id("batch",role,account,raw.sha256,raw.sheet,raw.header_row)
+    statement_period=w.state.period if role in ("partner_receivable","partner_payable") else None
+    suffix=(statement_period,) if statement_period else ()
+    bid=stable_id("batch",role,account,raw.sha256,raw.sheet,raw.header_row,*suffix)
     if any(b.id==bid for b in w.batches):fail("同一文件、工作表、表头和账户已经导入，未重复添加")
-    batch=Batch(bid,role,account,raw,mapping,due_col)
+    batch=Batch(bid,role,account,raw,mapping,due_col,statement_period)
     updated=replace(w,batches=w.batches+(batch,))
     updated.records
     return record_event(updated,"import_batch",batch=bid)
@@ -136,9 +149,24 @@ def _match_data(w,s,data,active):
     note=_note(data,required=basis=="人工指定" or bool(conflicts) or span>w.settings.window_days or max(len(left),len(right))>w.settings.max_parts)
     return {"left":left,"right":right,"amount_minor":a,"basis":basis,"conflicts":conflicts,"note":note,"period":s.period}
 
+def _balance_item(s,e):
+    """Find the invoice whose net settled balance this event can change."""
+    d=e.data
+    if e.kind in ("allocate","allocate_advance","apply_credit_note"):return d.get("item")
+    if e.kind=="undo_credit_note":return s.credits.get(d.get("target"),{}).get("item")
+    if e.kind=="undo_allocate":return s.allocations.get(d.get("target"),{}).get("item")
+    if e.kind=="refund":allocation=d.get("allocation")
+    elif e.kind=="undo_refund":allocation=s.refunds.get(d.get("target"),{}).get("allocation")
+    else:return None
+    return s.allocations.get(allocation,{}).get("item")
+
+
 def replay(w):
     from .settlements import apply_settlement, validate_balances, item_used, cash_free, occupied_settlements, advance_remaining
     from .reporting import apply_reporting, bank_statement, aging_report
+    from .credits import apply_credit, credit_rows
+    from .duplicates import apply_duplicate, guard_duplicate_use, duplicate_groups
+    from .counterparty import apply_counterparty, counterparty_report
     period_end(w.start_period)
     settings=asdict(w.settings)
     bounds={"window_days":(0,31),"max_parts":(2,5),"max_pool":(1,16),"max_candidates":(1,100),"project_budget":(1,200000),"anchor_budget":(1,10000)}
@@ -146,6 +174,9 @@ def replay(w):
         if type(settings[k]) is not int or not lo<=settings[k]<=hi:fail("组合规则参数超出允许范围")
     s=State(w.start_period);batches={b.id:b for b in w.batches};imported=set()
     allowed={
+      "apply_credit_note":{"credit","item","amount_minor","category","evidence"},"undo_credit_note":{"target","note"},
+      "review_duplicate":{"group","evidence"},
+      "register_partner_statement":{"batch","as_of","evidence"},"decide_partner":{"batch","own","partner","kind","evidence"},"undo_partner_decision":{"target","note"},
       "import_batch":{"batch"},"confirm_match":{"left","right","note"},"reject_match":{"left","right","note"},
       "undo_match":{"target","note"},"undo_reject":{"left","right","note"},
       "explain":{"bank","ledger","category","evidence"},"undo_explain":{"target","note"},
@@ -168,12 +199,22 @@ def replay(w):
             s.period=d["period"];continue
         if s.period in s.closings:fail("本期间已结账；请进入下一期间后记录后续处理")
         active=active_records(w,s)
+        guard_duplicate_use(w,s,e)
+        balance_item=_balance_item(s,e)
+        balance_before=item_used(s,balance_item) if balance_item else None
         if e.kind=="import_batch":
             b=batches.get(d.get("batch"))
             if b is None or b.id in imported:fail("来源导入记录无效或重复")
+            if b.statement_period is not None and b.statement_period!=s.period:fail("对方对账单导入月份与所属期间不一致")
             new=[r for r in w.records.values() if r.batch_id==b.id]
-            if s.closings and any(r.day<=period_end(max(s.closings)) for r in new):fail("来源包含已结账期间记录；请另建修订工作区")
+            if b.role not in ("partner_receivable","partner_payable") and s.closings and any(r.day<=period_end(max(s.closings)) for r in new):fail("来源包含已结账期间记录；请另建修订工作区")
             s.visible.update(r.id for r in new);imported.add(b.id)
+        elif e.kind in ("apply_credit_note","undo_credit_note"):
+            apply_credit(w,s,e,active)
+        elif e.kind=="review_duplicate":
+            apply_duplicate(w,s,e)
+        elif e.kind in ("register_partner_statement","decide_partner","undo_partner_decision"):
+            apply_counterparty(w,s,e,active)
         elif e.kind in ("set_closing_balances","classify_unreconciled","unclassify_unreconciled"):
             apply_reporting(w,s,e,active)
         elif e.kind in ("register_advance","allocate_advance","refund","undo_refund","undo_advance"):
@@ -238,7 +279,8 @@ def replay(w):
             if not isinstance(account_codes,list) or any(not isinstance(code,str) for code in account_codes) or len(set(account_codes))!=len(account_codes) or not set(account_codes)<={a.code for a in w.accounts}:fail("月末账户范围无效")
             statements={code:bank_statement(w,code,state=s) for code in account_codes}
             aging=aging_report(w,state=s)
-            s.closings[s.period]={"bank_statements":statements,"aging":aging,"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers),"advances":{k:advance_remaining(s,k) for k in s.advances},"refunds":sorted(s.refunds)}
+            partner_reports={bid:counterparty_report(w,bid,state=s) for bid,p in s.partner_statements.items() if p["as_of"]==period_end(s.period).isoformat()}
+            s.closings[s.period]={"partner_reports":partner_reports,"credit_balances":{p["id"]:p["remaining_minor"] for p in credit_rows(w,s)},"credits":dict((k,dict(v)) for k,v in s.credits.items()),"duplicate_groups":duplicate_groups(w,s),"bank_statements":statements,"aging":aging,"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers),"advances":{k:advance_remaining(s,k) for k in s.advances},"refunds":sorted(s.refunds)}
         elif e.kind in ("exclude","undo_exclude"):
             rid=d.get("row");_note(d,required=True)
             if rid not in s.visible:fail("来源行不存在")
@@ -246,20 +288,24 @@ def replay(w):
                 if rid not in active:fail("来源行当前不可排除")
                 occupied=_used(s.matches)|{x for p in s.transfers.values() for x in (p["outgoing"],p["incoming"])}|{x for p in s.allocations.values() for x in (p["cash"],p["item"])}|{x for p in s.explanations.values() for x in (p["bank"],p["ledger"])}
                 occupied |= occupied_settlements(s)
+                occupied |= {x for p in s.credits.values() for x in (p["credit"],p["item"])}
+                occupied |= {x for p in s.partner_decisions.values() for x in (p["own"],p["partner"]) if x}
                 if rid in occupied:fail("请先撤销此记录参与的业务操作")
                 s.excluded.add(rid)
             else:
                 if rid not in s.excluded:fail("此记录未排除")
                 s.excluded.remove(rid)
         validate_balances(w,s)
+        if balance_item and item_used(s,balance_item)!=balance_before:
+            s.balance_revisions[balance_item]=s.balance_revisions.get(balance_item,0)+1
     if imported!=set(batches):fail("工作区包含未经导入事件登记的来源")
     return s
 
-def record_event(w,kind,**data):
-    if kind=="close_period" and "accounts" not in data:data["accounts"]=[a.code for a in w.accounts]
+def record_event(w,event_kind,**data):
+    if event_kind=="close_period" and "accounts" not in data:data["accounts"]=[a.code for a in w.accounts]
     try:data=json.loads(json.dumps(data,ensure_ascii=False,allow_nan=False))
     except (ValueError,TypeError):fail("操作内容格式无效")
-    updated=replace(w,events=w.events+(Event(len(w.events)+1,kind,data),))
+    updated=replace(w,events=w.events+(Event(len(w.events)+1,event_kind,data),))
     updated.__dict__["records"]=w.records
     updated.state
     return updated

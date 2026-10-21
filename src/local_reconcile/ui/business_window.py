@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QForm
 from .workers import JobRunner
 from .settlement_pages import SettlementPages
 from .reporting_pages import ReportingPages
+from .commercial_pages import CommercialPages
 from ..business.settlements import allocation_net
 from .table_models import DataTableModel
 from .results_page import configure_table
@@ -23,7 +24,7 @@ from ..business.operations import outstanding,open_items,suggest_allocations,sug
 from ..business.storage import save_workspace,load_workspace,export_workspace,import_legacy
 from ..business.demo import make_demo
 
-_NAMES={"bank":"银行流水","ledger":"银行日记账","receivable":"应收明细","payable":"应付明细"}
+_NAMES={"bank":"银行流水","ledger":"银行日记账","receivable":"应收明细","payable":"应付明细","receivable_credit":"应收红字/退货折让","payable_credit":"应付红字/退货折让","partner_receivable":"客户对账单（我方应收口径）","partner_payable":"供应商对账单（我方应付口径）"}
 
 def button(text,callback):
     b=QPushButton(text);b.clicked.connect(lambda checked=False:callback());return b
@@ -40,7 +41,7 @@ def populate(t,headers,rows):
     t.setModel(DataTableModel(headers,rows,t))
     t.resizeColumnsToContents()
 
-class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
+class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow):
     def __init__(self,parent=None):
         super().__init__(parent);self.setWindowTitle("业务核算 · 本地对账工作台");self.resize(1460,960);self.setMinimumSize(1100,780)
         self.workspace=new_workspace();self.analysis=None;self.dirty=False;self.path=None;self.busy=False;self.job_id=0;self.source_signature=None
@@ -53,8 +54,8 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
             b=button(text,lambda fn=fn:self.guard(fn));tools.addWidget(b);self.toolbar.append(b)
         layout.addWidget(self.tools)
         self.summary=QLabel();self.summary.setWordWrap(True);self.summary.setObjectName("muted");layout.addWidget(self.summary)
-        self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
-        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page();self._refund_page();self._advance_page();self._balance_page();self._aging_page()
+        self.tabs=QTabWidget();self.tabs.setUsesScrollButtons(True);layout.addWidget(self.tabs,1)
+        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page();self._refund_page();self._advance_page();self._balance_page();self._aging_page();self._credit_page();self._duplicate_page();self._partner_page()
         self.detail=QPlainTextEdit();self.detail.setReadOnly(True);self.detail.setMaximumHeight(115);self.detail.setPlaceholderText("选择记录查看原始文件、字段及核实依据。");layout.addWidget(self.detail)
         bottom=QHBoxLayout();self.status=QLabel("本地人民币业务核算 · 结果需人工确认");bottom.addWidget(self.status,1)
         self.legacy_button=button("导入旧版项目",lambda:self.guard(self.legacy_clicked));bottom.addWidget(self.legacy_button)
@@ -162,8 +163,8 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
         for period in sorted(s.closings):self.period_view.addItem(period+" 月末快照",period)
         ix=self.period_view.findData(selected);self.period_view.setCurrentIndex(max(0,ix));self.period_view.blockSignals(False);self.render_outstanding()
         self.open_item_rows=open_items(w)
-        populate(self.open_item_table,("类型","往来单位","单据编号","原金额（元）","已核销（元）","未结清（元）","账龄（天）","到期日","逾期（天）"),
-          [[_NAMES[i["record"].role],i["record"].party,i["record"].reference,format_amount(i["record"].amount_minor),format_amount(i["allocated_minor"]),format_amount(i["remaining_minor"]),i["age_days"],i["record"].due or "",i["overdue_days"] if i["overdue_days"] is not None else "未提供"] for i in self.open_item_rows])
+        populate(self.open_item_table,("类型","往来单位","单据编号","原金额（元）","资金净核销（元）","红字抵减（元）","未结清（元）","账龄（天）","到期日","逾期（天）"),
+          [[_NAMES[i["record"].role],i["record"].party,i["record"].reference,format_amount(i["record"].amount_minor),format_amount(i["allocated_minor"]),format_amount(i["credited_minor"]),format_amount(i["remaining_minor"]),i["age_days"],i["record"].due or "",i["overdue_days"] if i["overdue_days"] is not None else "未提供"] for i in self.open_item_rows])
         self.allocation_ids=list(s.allocations)
         populate(self.allocation_table,("银行收付款","往来单据","原核销金额（元）","退款后净核销（元）","预收预付登记","核实依据","期间"),
                  [[self.label(p["cash"]),self.label(p["item"]),format_amount(p["amount_minor"]),format_amount(allocation_net(s,k)),p.get("advance",""),p["note"],p["period"]] for k,p in s.allocations.items()])
@@ -172,6 +173,7 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
                  [[self.label(p["outgoing"]),self.label(p["incoming"]),format_amount(p["amount_minor"]),format_amount(p["fee_minor"]),p["evidence"],p["period"]] for p in s.transfers.values()])
         self._refresh_settlements()
         self._refresh_reporting()
+        self._refresh_commercial()
         self.allocation_candidates=();self.transfer_candidates=()
         populate(self.allocation_candidate_table,("候选银行记录","候选单据","建议金额（元）"),[])
         populate(self.transfer_candidate_table,("候选转出","候选转入"),[])
@@ -196,8 +198,8 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
         balances=s.closings[period]["open_items"] if period else {}
         populate(self.snapshot_table,("当期往来单据","月末未结清（元）"),[[self.label(rid),format_amount(amount)] for rid,amount in balances.items()])
 
-    def apply(self,kind,**data):
-        self.workspace=record_event(self.workspace,kind,**data);self.dirty=True;self.refresh();self.status.setText("业务操作已记录 · 原始来源保留")
+    def apply(self,event_kind,**data):
+        self.workspace=record_event(self.workspace,event_kind,**data);self.dirty=True;self.refresh();self.status.setText("业务操作已记录 · 原始来源保留")
 
     def _run(self,work,done):
         if self.busy:fail("请等待当前任务完成")
@@ -361,15 +363,17 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
         for b in panel.findChildren(QPushButton):b.hide()
         panel.sheet_combo.setEnabled(False);panel.header_spin.setEnabled(False)
         panel.layout().itemAt(0).layout().itemAt(0).widget().setText(_NAMES[role])
-        if role in ("receivable","payable"):
-            for name,aliases in (("reference_col",("单据编号","发票号码","发票号","单据号")),("amount_col",("单据金额","应收金额","应付金额")),("party_col",("客户","供应商","往来单位"))):
+        if role not in ("bank","ledger"):
+            for name,aliases in (("reference_col",("单据编号","发票号码","发票号","单据号")),("amount_col",("单据金额","应收金额","应付金额","未结余额","未结清余额","对账余额","红字金额","折让金额")),("party_col",("客户","供应商","往来单位","客户名称","供应商名称"))):
                 index=next((i for i,h in enumerate(raw.headers) if h.strip() in aliases),None)
                 if index is not None:panel.columns[name].setCurrentIndex(index+1)
         box.addWidget(panel);due=QComboBox();due.addItem("不提供到期日",None)
         for i,h in enumerate(raw.headers):due.addItem(h,i)
         if role in ("receivable","payable"):
             horizontal(box,QLabel("到期日（可选）"),due)
-        confirmed=QCheckBox("已核实字段、金额方向、人民币和所选账户；应收应付为每张单据一行的正数金额");box.addWidget(confirmed)
+        hint="对方表须为每张单据一行的非负未结余额，按我方应收/应付口径填写，日期为原单据日期" if role.startswith("partner_") else "红字、退货、折让金额可正可负，作为抵减额度；每张单据一行" if role.endswith("_credit") else "应收应付为每张单据一行的正数金额"
+        text=QLabel(hint);text.setWordWrap(True);box.addWidget(text)
+        confirmed=QCheckBox("已核实字段、金额方向、人民币及来源口径");box.addWidget(confirmed)
         buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);buttons.accepted.connect(d.accept);buttons.rejected.connect(d.reject);box.addWidget(buttons)
         if d.exec()!=QDialog.Accepted:return
         mapping=panel.mapping(account or "OPEN-ITEMS",confirmed.isChecked());w=self.workspace;due_col=due.currentData() if role in ("receivable","payable") else None
@@ -380,10 +384,11 @@ class BusinessWindow(SettlementPages,ReportingPages,QMainWindow):
 
     def demo_clicked(self):
         if not self.discard_ok():return
-        choice,ok=QInputDialog.getItem(self,"载入虚构示例","选择示例：",["综合业务（含退款、预收预付、账龄）","月末余额调节与逾期分析"],0,False)
+        choice,ok=QInputDialog.getItem(self,"载入虚构示例","选择示例：",["综合业务（含退款、预收预付、账龄）","月末余额调节与逾期分析","红字退货、重复检查与双方往来对账"],0,False)
         if not ok:return
         from ..business.reporting_smoke import reporting_demo
-        factory=reporting_demo if choice.startswith("月末") else make_demo
+        from ..business.commercial_demo import commercial_demo
+        factory=commercial_demo if choice.startswith("红字") else reporting_demo if choice.startswith("月末") else make_demo
         self._run(lambda progress,cancelled:factory(),lambda w:(self.set_workspace(w),setattr(self,"dirty",True),setattr(self,"path",None),self.status.setText("已载入虚构示例，可进入相应业务页复核。")))
 
     def save_to(self,path,close_after=False):

@@ -1,6 +1,6 @@
 # Local Reconcile
 
-A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.4.1**. MIT-licensed application code; dependencies retain their own licenses.
+A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.5.0**. MIT-licensed application code; dependencies retain their own licenses.
 
 [中文](README.md)
 
@@ -26,6 +26,15 @@ Refunds preserve original bank data and historical closing snapshots. They do no
 - Filter by party, role or overdue status. Month-end snapshots retain both reports and the account membership present at closing; later events do not rewrite the old reports. Excel export includes balance adjustment, source details, aging summaries and an open-item follow-up list.
 
 Choose the synthetic period-end example from the example picker. Workspaces containing new reporting events require 0.4.0 or later.
+
+## Credit adjustments, duplicates and partner statements
+
+- Apply evidenced sales/purchase credit notes, returns and allowances to invoices for the same party and direction. Positive or negative input becomes an absolute available credit limit; raw signed cells remain intact. Credit reductions are separate from net cash settlements. A settled invoice needs an actual linked refund before crediting the reopened balance. Undo cannot over-settle an invoice.
+- Review suspicious bank/journal records across different import batches. Account, party, amount and reference (or date when a reference is missing) form warnings; pending records are blocked from further cash use or confirmation. Evidence can mark the whole group as distinct transactions, or exclude a genuine duplicate while retaining its source. New group membership requires a new review.
+- Import a single customer's or supplier's month-end statement, using our receivable/payable perspective and one nonnegative outstanding amount per invoice. Register the current month-end cutoff and evidence. Compare exact party/reference balances after refunds and credits; distinguish missing invoices from zero balances. Only equal rows can be confirmed. Explanations retain discrepancies; changed balances invalidate previous decisions.
+- Month-end snapshots and Excel exports retain the comparison and duplicate evidence. Re-importing an unchanged statement in a later month creates a separate monthly snapshot. New events require version 0.5.0 or later. Choose the new synthetic commercial example to explore the workflows.
+
+[Download the Windows portable release](https://github.com/edcee314159/local-reconcile/releases/latest).
 
 ## Run
 

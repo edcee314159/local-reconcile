@@ -11,7 +11,7 @@ def test_refund_controls_restore_balance(app):
     try:
         data,o,c,i=cashbook();data=record_event(data,'allocate',cash=o,item=i,amount_minor=10000,note='')
         a=next(iter(data.state.allocations));w.set_workspace(data)
-        assert w.tabs.count()==9
+        assert w.tabs.count()==12
         w.refund_original.setCurrentIndex(w.refund_original.findData(o))
         w.refund_cash.setCurrentIndex(w.refund_cash.findData(c))
         w.refund_target.setCurrentIndex(w.refund_target.findData('allocation:'+a))

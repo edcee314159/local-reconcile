@@ -2,7 +2,7 @@
 from copy import deepcopy
 from collections import defaultdict
 from .workspace import active_records,period_end,_used,_integer,_note,fail
-from .settlements import item_used
+from .settlements import item_used, item_cash_used, item_credit_used
 
 TIMING_CATEGORIES=("银行已收企业未收","银行已付企业未付","企业已收银行未收","企业已付银行未付")
 AGE_BUCKETS=("0—30天","31—60天","61—90天","90天以上")
@@ -79,10 +79,10 @@ def aging_report(w,period=None,state=None):
     end=period_end(period);details=[]
     for r in active_records(w,s).values():
         if r.role not in ("receivable","payable"):continue
-        allocated=item_used(s,r.id);remaining=r.amount_minor-allocated
+        allocated=item_cash_used(s,r.id);credited=item_credit_used(s,r.id);remaining=r.amount_minor-item_used(s,r.id)
         if remaining<=0:continue
         age=(end-r.day).days;bucket=AGE_BUCKETS[0 if age<=30 else 1 if age<=60 else 2 if age<=90 else 3]
         overdue=max(0,(end-r.due).days) if r.due else None
-        details.append({"record_id":r.id,"role":r.role,"party":r.party,"reference":r.reference,"day":r.day.isoformat(),"due":r.due.isoformat() if r.due else "","amount_minor":r.amount_minor,"allocated_minor":allocated,"remaining_minor":remaining,"age_days":age,"bucket":bucket,"overdue_days":overdue,"status":"未提供到期日" if overdue is None else "已逾期" if overdue else "未逾期"})
+        details.append({"record_id":r.id,"role":r.role,"party":r.party,"reference":r.reference,"day":r.day.isoformat(),"due":r.due.isoformat() if r.due else "","amount_minor":r.amount_minor,"allocated_minor":allocated,"credited_minor":credited,"remaining_minor":remaining,"age_days":age,"bucket":bucket,"overdue_days":overdue,"status":"未提供到期日" if overdue is None else "已逾期" if overdue else "未逾期"})
     details.sort(key=lambda p:(p["role"],p["party"],p["day"],p["record_id"]))
     return {"period":period,"as_of":end.isoformat(),"details":details,"groups":summarize_aging(details)}
