@@ -12,6 +12,7 @@ class _Work(QRunnable):
     def run(self):
         result=error=None
         try:
+            if self.cancel.is_set():raise CancelledError()
             result=self.work(lambda s,n,t:self.signals.progress.emit(self.job_id,s,n,t),self.cancel.is_set)
         except Exception as exc:error=exc
         self.signals.done.emit(self.job_id,result,error)
@@ -19,9 +20,11 @@ class _Work(QRunnable):
 class JobRunner(QObject):
     progress=Signal(str,int,int)
     def __init__(self,parent=None):
-        super().__init__(parent);self.pool=QThreadPool(self);self.pool.setMaxThreadCount(2);self.jobs={};self.current=None
+        super().__init__(parent);self.pool=QThreadPool(self);self.pool.setMaxThreadCount(1);self.jobs={};self.current=None
     def submit(self,job_id,work,on_result,on_error):
         for _,cancel,_,_ in self.jobs.values():cancel.set()
+        # Canceled work may already be committing a file. A single worker keeps
+        # every newer save behind that commit instead of letting it be overwritten.
         self.current=job_id;cancel=Event();worker=_Work(job_id,work,cancel)
         worker.signals.done.connect(self._done);worker.signals.progress.connect(self._progress)
         self.jobs[job_id]=(worker,cancel,on_result,on_error);self.pool.start(worker)

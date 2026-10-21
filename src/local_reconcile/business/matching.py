@@ -48,12 +48,15 @@ def suggest_matches(w,progress=quiet_progress,cancelled=never_cancel):
     check_cancel(cancelled)
     records=active_records(w);settings=w.settings
     sides={"bank":[],"ledger":[]};index=defaultdict(list)
-    for r in records.values():
+    for position,r in enumerate(records.values()):
+        if position%128==0:check_cancel(cancelled)
         if r.role not in sides:continue
         sides[r.role].append(r)
         sign=(r.amount_minor>0)-(r.amount_minor<0)
         if r.reference:index[r.role,r.account,sign,"ref",r.reference].append(r)
-        if r.party:index[r.role,r.account,sign,"party",r.party].append(r)
+        if r.party:
+            index[r.role,r.account,sign,"party",r.party].append(r)
+            if not r.reference:index[r.role,r.account,sign,"party_empty_ref",r.party].append(r)
         for mode,include in (("all",True),("empty_ref",not r.reference),
                              ("empty_party",not r.party),("empty_both",not r.reference and not r.party)):
             if include:index[r.role,r.account,sign,"weak",r.day,r.amount_minor,mode].append(r)
@@ -65,14 +68,24 @@ def suggest_matches(w,progress=quiet_progress,cancelled=never_cancel):
         opposite="ledger" if anchor.role=="bank" else "bank"
         sign=(anchor.amount_minor>0)-(anchor.amount_minor<0)
         key=(opposite,anchor.account,sign,anchor.reference,anchor.party,anchor.day,abs(anchor.amount_minor))
+        anchor_count=0
         if key not in cached:
-            possible={}
+            possible={};seen=set()
             mode="empty_both" if anchor.reference and anchor.party else "empty_ref" if anchor.reference else "empty_party" if anchor.party else "all"
             sources=[index.get((opposite,anchor.account,sign,"ref",anchor.reference),()),
-                     index.get((opposite,anchor.account,sign,"party",anchor.party),()),
+                     index.get((opposite,anchor.account,sign,"party_empty_ref" if anchor.reference else "party",anchor.party),()),
                      index.get((opposite,anchor.account,sign,"weak",anchor.day,anchor.amount_minor,mode),())]
             for source in sources:
                 for other in source:
+                    if other.id in seen:continue
+                    seen.add(other.id)
+                    # The budget also covers pool construction, not only subset sums.
+                    if count>=settings.project_budget or anchor_count>=settings.anchor_budget:
+                        reason="候选池构建预算已达到上限，未搜索完成"
+                        graph.limited(tuple(r.id for rows in sides.values() for r in rows),reason)
+                        return graph.finish()
+                    count+=1;anchor_count+=1
+                    if count%128==0:check_cancel(cancelled)
                     if abs((anchor.day-other.day).days)>settings.window_days or abs(other.amount_minor)>abs(anchor.amount_minor):continue
                     basis,conflicts=relation_basis(records,(anchor.id,),(other.id,))
                     weak=(anchor.day==other.day and anchor.amount_minor==other.amount_minor
@@ -88,7 +101,6 @@ def suggest_matches(w,progress=quiet_progress,cancelled=never_cancel):
                 graph.limited((anchor.id,)+tuple(r.id for r in pool),"可组成记录池超过 16 条，未穷尽匹配")
                 range_heads[key]=anchor.id
             continue
-        anchor_count=0
         for k in range(1,min(settings.max_parts,len(pool))+1):
             for parts in combinations(pool,k):
                 if count>=settings.project_budget:
@@ -121,13 +133,15 @@ def _many_to_many(w,records,sides,graph,count,cancelled):
     groups=defaultdict(lambda:{"bank":[],"ledger":[]});parties=defaultdict(lambda:defaultdict(list))
     settings=w.settings
     for role,rows in sides.items():
-        for r in rows:
+        for position,r in enumerate(rows):
+            if position%128==0:check_cancel(cancelled)
             if not r.amount_minor:continue
             if r.reference:groups[r.account,r.amount_minor>0,r.reference][role].append(r)
             if r.party:parties[r.account,r.amount_minor>0,r.party][r.reference].append(r)
     # Missing identifiers may join a party group, but conflicting nonempty identifiers never mix.
     extra=[]
-    for buckets in parties.values():
+    for position,buckets in enumerate(parties.values()):
+        if position%128==0:check_cancel(cancelled)
         empty=buckets.get("",())
         if not empty:continue
         if len(empty)>2*settings.max_pool:

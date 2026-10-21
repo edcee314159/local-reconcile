@@ -1,6 +1,6 @@
 # Local Reconcile
 
-A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.4.0**. MIT-licensed application code; dependencies retain their own licenses.
+A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.4.1**. MIT-licensed application code; dependencies retain their own licenses.
 
 [中文](README.md)
 
@@ -8,7 +8,7 @@ A local Windows reconciliation and settlement workbench for Chinese private busi
 
 - Import XLSX and UTF-8 CSV bank statements, cash journals, receivables and payables with confirmed column mappings.
 - Suggest one-to-one, one-to-many and many-to-many equal-sum matches. Automatic combinations use up to five records per side; manual combinations allow up to 100 per side. Matching requires the same own CNY account and payment direction.
-- Retain candidate ambiguity and evidence. Conflicting references never silently fall back to a weaker automatic rule. Large pools and search budgets produce explicit incomplete-search ranges.
+- Retain candidate ambiguity and evidence. Conflicting references never silently fall back to a weaker automatic rule. Large pools and search budgets produce explicit incomplete-search ranges. Budgets and cancellation checks also cover candidate-pool construction.
 - Explain settlement differences without treating them as equal matches.
 - Preserve month-end outstanding and open-item snapshots while continuing in later periods.
 - Partially allocate receipts/payments to open invoices, with available-cash and invoice-balance checks.
