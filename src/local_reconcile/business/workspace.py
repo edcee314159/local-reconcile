@@ -8,7 +8,7 @@ from ..normalize import normalize, _value
 from ..dates import parse_date
 from ..matching import stable_id
 
-ROLES = ("bank", "ledger", "receivable", "payable", "receivable_credit", "payable_credit", "partner_receivable", "partner_payable", "settlement_order", "settlement_line", "cutoff_business", "cutoff_entry")
+ROLES = ("bank", "ledger", "receivable", "payable", "receivable_credit", "payable_credit", "partner_receivable", "partner_payable", "settlement_order", "settlement_line", "cutoff_business", "cutoff_entry", "business_evidence")
 CATEGORIES = ("手续费", "折扣", "退款", "其他", "待查")
 
 def fail(message):
@@ -63,6 +63,10 @@ def _batch_records(batch):
         if batch.role in ("settlement_order","cutoff_business") and t.amount_minor<=0:fail("订单及待核算业务金额须为正数")
         if batch.role in ("settlement_line","cutoff_entry") and not t.amount_minor:fail("结算及记账明细金额不能为零")
         if batch.role=="settlement_line" and (t.amount_minor>0)!=(extra["category"] in ("销售","其他加款")):fail("结算类别与金额正负方向不一致")
+        if batch.role=="business_evidence":
+            if not t.party or not t.reference:fail("业务凭证须提供单位及唯一单据编号")
+            kind=extra["kind"]
+            if (kind in ("合同","付款","收款","退款") and t.amount_minor<=0) or (kind=="发票" and not t.amount_minor) or (kind not in ("合同","发票","付款","收款","退款") and t.amount_minor<0):fail("合同及收付款退款须为正数，发票不能为零，其余凭证金额不能为负数")
         due=None
         if batch.due_col is not None:
             value=_value(rows[t.id],batch.due_col)
@@ -100,6 +104,10 @@ def build_records(w):
                 suffix=(r.extra["settlement"],r.reference) if r.role=="settlement_line" else (r.extra["entry"],) if r.role=="cutoff_entry" else (r.reference,)
                 key=(r.role,r.party,*suffix)
                 if key in invoices:fail("订单、业务、结算行或凭证行唯一编号重复，请核实来源")
+                invoices.add(key)
+            if r.role=="business_evidence":
+                key=(r.role,r.party,r.extra["direction"],r.extra["kind"],r.reference)
+                if key in invoices:fail("同一单位、方向和类型的单据编号重复，请核实来源")
                 invoices.add(key)
             records[r.id]=r
             if len(records)>200000:fail("工作区累计记录超过 200,000 行，请拆分工作区")
@@ -181,6 +189,8 @@ def replay(w):
     from .counterparty import apply_counterparty, counterparty_report
     from .net_settlements import apply_net_settlement, net_settlement_reports, touch_net, occupied_net
     from .cutoff import apply_cutoff, cutoff_report, touch_cutoff
+    from .evidence_chain import apply_evidence,evidence_report,touch_evidence,occupied_evidence
+    from .contract_terms import apply_contract,validate_stage_balances,contract_report,occupied_contracts
     period_end(w.start_period)
     settings=asdict(w.settings)
     bounds={"window_days":(0,31),"max_parts":(2,5),"max_pool":(1,16),"max_candidates":(1,100),"project_budget":(1,200000),"anchor_budget":(1,10000)}
@@ -204,6 +214,7 @@ def replay(w):
       "set_closing_balances":{"account","bank_minor","ledger_minor","evidence"},
       "classify_unreconciled":{"row","category","evidence"},"unclassify_unreconciled":{"row","note"},
       "close_period":{"accounts"},"advance_period":{"period"},"exclude":{"row","note"},"undo_exclude":{"row","note"}}
+    allowed.update({'register_evidence_rule': {'evidence', 'group', 'contract', 'required'}, 'undo_evidence_rule': {'target', 'note'}, 'link_evidence_cash': {'evidence', 'cash', 'document', 'amount_minor'}, 'undo_evidence_cash': {'target', 'note'}, 'confirm_evidence_chain': {'evidence', 'group'}, 'undo_evidence_confirmation': {'target', 'note'}, 'register_contract_stage': {'delay_days', 'trigger', 'evidence', 'name', 'contract', 'base_day', 'amount_minor'}, 'verify_stage_condition': {'evidence', 'stage', 'document'}, 'undo_stage_condition': {'target', 'note'}, 'link_stage_cash': {'cash', 'kind', 'stage', 'evidence', 'amount_minor'}, 'undo_stage_cash': {'target', 'note'}, 'undo_contract_stage': {'target', 'note'}, 'record_correction': {'reason', 'base', 'operations'}})
     for expected,e in enumerate(w.events,1):
         if type(e.seq) is not int or e.seq!=expected or e.kind not in allowed or type(e.data) is not dict:fail("操作记录类型或序号无效")
         d=e.data
@@ -223,8 +234,15 @@ def replay(w):
             if b is None or b.id in imported:fail("来源导入记录无效或重复")
             if b.statement_period is not None and b.statement_period!=s.period:fail("对方对账单导入月份与所属期间不一致")
             new=[r for r in w.records.values() if r.batch_id==b.id]
-            if b.role not in ("partner_receivable","partner_payable","settlement_order","settlement_line","cutoff_business","cutoff_entry") and s.closings and any(r.day<=period_end(max(s.closings)) for r in new):fail("来源包含已结账期间记录；请另建修订工作区")
+            if b.role not in ("partner_receivable","partner_payable","settlement_order","settlement_line","cutoff_business","cutoff_entry","business_evidence") and s.closings and any(r.day<=period_end(max(s.closings)) for r in new):fail("来源包含已结账期间记录；请另建修订工作区")
             s.visible.update(r.id for r in new);imported.add(b.id)
+        elif e.kind in ('register_evidence_rule', 'undo_evidence_rule', 'link_evidence_cash', 'undo_evidence_cash', 'confirm_evidence_chain', 'undo_evidence_confirmation'):
+            apply_evidence(w,s,e,active)
+        elif e.kind in ('register_contract_stage', 'verify_stage_condition', 'undo_stage_condition', 'link_stage_cash', 'undo_stage_cash', 'undo_contract_stage'):
+            apply_contract(w,s,e,active)
+        elif e.kind=="record_correction":
+            from .corrections import record_correction_audit
+            record_correction_audit(w,s,e)
         elif e.kind in ("confirm_net_settlement","undo_net_settlement"):
             apply_net_settlement(w,s,e,active)
         elif e.kind in ("register_cutoff_rule","undo_cutoff_rule","explain_cutoff","undo_cutoff_explanation"):
@@ -301,14 +319,14 @@ def replay(w):
             aging=aging_report(w,state=s)
             partner_reports={bid:counterparty_report(w,bid,state=s) for bid,p in s.partner_statements.items() if p["as_of"]==period_end(s.period).isoformat()}
             net_reports=net_settlement_reports(w,state=s);cutoff=cutoff_report(w,state=s)
-            s.closings[s.period]={"net_settlements":net_reports,"cutoff":cutoff,"partner_reports":partner_reports,"credit_balances":{p["id"]:p["remaining_minor"] for p in credit_rows(w,s)},"credits":dict((k,dict(v)) for k,v in s.credits.items()),"duplicate_groups":duplicate_groups(w,s),"bank_statements":statements,"aging":aging,"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers),"advances":{k:advance_remaining(s,k) for k in s.advances},"refunds":sorted(s.refunds)}
+            s.closings[s.period]={"evidence":evidence_report(w,state=s),"contracts":contract_report(w,state=s),"net_settlements":net_reports,"cutoff":cutoff,"partner_reports":partner_reports,"credit_balances":{p["id"]:p["remaining_minor"] for p in credit_rows(w,s)},"credits":dict((k,dict(v)) for k,v in s.credits.items()),"duplicate_groups":duplicate_groups(w,s),"bank_statements":statements,"aging":aging,"outstanding":pending,"open_items":balances,"matches":sorted(s.matches),"allocations":sorted(s.allocations),"transfers":sorted(s.transfers),"advances":{k:advance_remaining(s,k) for k in s.advances},"refunds":sorted(s.refunds)}
         elif e.kind in ("exclude","undo_exclude"):
             rid=d.get("row");_note(d,required=True)
             if rid not in s.visible:fail("来源行不存在")
             if e.kind=="exclude":
                 if rid not in active:fail("来源行当前不可排除")
                 occupied=_used(s.matches)|{x for p in s.transfers.values() for x in (p["outgoing"],p["incoming"])}|{x for p in s.allocations.values() for x in (p["cash"],p["item"])}|{x for p in s.explanations.values() for x in (p["bank"],p["ledger"])}
-                occupied |= occupied_settlements(s)|occupied_net(s)
+                occupied |= occupied_settlements(s)|occupied_net(s)|occupied_evidence(s)|occupied_contracts(s)
                 occupied |= set(s.cutoff_rules)|set(s.cutoff_explanations)
                 occupied |= {x for p in s.credits.values() for x in (p["credit"],p["item"])}
                 occupied |= {x for p in s.partner_decisions.values() for x in (p["own"],p["partner"]) if x}
@@ -317,8 +335,8 @@ def replay(w):
             else:
                 if rid not in s.excluded:fail("此记录未排除")
                 s.excluded.remove(rid)
-        touch_net(w,s,e);touch_cutoff(w,s,e)
-        validate_balances(w,s)
+        touch_net(w,s,e);touch_cutoff(w,s,e);touch_evidence(w,s,e)
+        validate_balances(w,s);validate_stage_balances(w,s)
         if balance_item and item_used(s,balance_item)!=balance_before:
             s.balance_revisions[balance_item]=s.balance_revisions.get(balance_item,0)+1
     if imported!=set(batches):fail("工作区包含未经导入事件登记的来源")

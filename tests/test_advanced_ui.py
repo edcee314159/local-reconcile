@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 def test_real_net_and_cutoff_ui_actions_history_and_sources(app):
     w=BusinessWindow()
     try:
-        w.set_workspace(advanced_demo());assert w.tabs.count()==14
+        w.set_workspace(advanced_demo());assert w.tabs.count()==17
         assert w.net_bank_list.count()==1
         w.net_bank_list.item(0).setSelected(True);w.net_evidence.setText('原订单与退款及费用已核对')
         w.confirm_net_selected();assert net_settlement_reports(w.workspace)[0]['review_valid']
