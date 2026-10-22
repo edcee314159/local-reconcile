@@ -71,3 +71,7 @@ def test_packaged_five_business_workflows(tmp_path):
     assert data["duplicate_use_blocked"] is True and data["duplicate_groups_after_exclusion"]==0
     assert data["partner_confirmed_rows"]==1 and data["partner_explained_rows"]==3
     assert data["partner_history_preserved"] is True
+
+    assert data["net_settlement_minor"]==9200 and data["net_settlement_confirmed"]
+    assert data["cutoff_missing_minor"]==3000 and data["cutoff_monthly_minor"]==10000
+    assert data["cutoff_unmatched_postings"]==1 and data["advanced_history_preserved"]

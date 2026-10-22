@@ -17,6 +17,7 @@ class Batch:
     mapping: MappingSpec
     due_col: int | None = None
     statement_period: str | None = None
+    extra_cols: dict = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class Record:
@@ -31,6 +32,7 @@ class Record:
     reference: str
     summary: str
     due: date | None = None
+    extra: dict = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class Settings:
@@ -61,6 +63,11 @@ class State:
     advances: dict = field(default_factory=dict)
     closing_balances: dict = field(default_factory=dict)
     unreconciled_classes: dict = field(default_factory=dict)
+    net_settlements: dict = field(default_factory=dict)
+    net_versions: dict = field(default_factory=dict)
+    cutoff_rules: dict = field(default_factory=dict)
+    cutoff_explanations: dict = field(default_factory=dict)
+    cutoff_versions: dict = field(default_factory=dict)
     balance_revisions: dict = field(default_factory=dict)
     credits: dict = field(default_factory=dict)
     duplicate_decisions: dict = field(default_factory=dict)

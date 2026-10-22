@@ -41,6 +41,7 @@ def save_workspace(w,path,cancelled=never_cancel):
     for b in w.batches:
         body={"id":b.id,"role":b.role,"account":b.account,"raw":_encode(b.raw),"mapping":_encode(b.mapping),"due_col":b.due_col}
         if b.statement_period is not None:body["statement_period"]=b.statement_period
+        if b.extra_cols:body["extra_cols"]=b.extra_cols
         batches.append({**body,"payload_sha256":sha256(_canonical(body)).hexdigest()})
     data={"version":2,"start_period":w.start_period,"accounts":[asdict(a) for a in w.accounts],
           "settings":asdict(w.settings),"batches":batches,"events":[asdict(e) for e in w.events]}
@@ -64,10 +65,10 @@ def load_workspace(path):
             w=add_account(w,**a)
         batches=[]
         for b in d["batches"]:
-            if type(b) is not dict or set(b)-{"statement_period"}!={"id","role","account","raw","mapping","due_col","payload_sha256"}:fail("来源字段无效")
+            if type(b) is not dict or set(b)-{"statement_period","extra_cols"}!={"id","role","account","raw","mapping","due_col","payload_sha256"}:fail("来源字段无效")
             body={k:v for k,v in b.items() if k!="payload_sha256"}
             if sha256(_canonical(body)).hexdigest()!=b["payload_sha256"]:fail("来源内容校验失败")
-            batches.append(Batch(b["id"],b["role"],b["account"],_decode(b["raw"]),_decode(b["mapping"]),b["due_col"],b.get("statement_period")))
+            batches.append(Batch(b["id"],b["role"],b["account"],_decode(b["raw"]),_decode(b["mapping"]),b["due_col"],b.get("statement_period"),b.get("extra_cols",{})))
         if type(d["events"]) is not list or len(d["events"])>200000:fail("操作记录超过限制")
         events=[]
         for e in d["events"]:
@@ -129,6 +130,8 @@ def export_workspace(w,path,cancelled=never_cancel):
       "双方往来对账汇总":["期间","对账单批次","往来单位","方向","截止日","我方未结（元）","对方未结（元）","差额（元）","已确认行数","已说明差异行数","待复核行数","对账单依据"],
       "双方往来对账明细":["期间","对账单批次","单据编号","我方记录","对方记录","我方未结（元）","对方未结（元）","差额（元）","状态","复核依据"],
       "操作记录":["序号","操作","内容"]}
+    from .advanced_export import HEADERS,export_advanced
+    headers.update(HEADERS)
     for name,head in headers.items():sheets[name]=wb.create_sheet(name);_append(sheets[name],head)
     def put(name,row):_append(sheets[name],row)
     batches={b.id:b for b in w.batches};source_rows={b.id:{r.id:r for r in b.raw.rows} for b in w.batches}
@@ -212,6 +215,7 @@ def export_workspace(w,path,cancelled=never_cancel):
         check_cancel(cancelled)
         put("双方往来对账汇总",[r["period"],r["batch"],r["party"],r["role"],r["as_of"],format_amount(r["own_total_minor"]),format_amount(r["partner_total_minor"]),format_amount(r["difference_minor"]),r["confirmed_count"],r["explained_count"],r["unreviewed_count"],r["evidence"]])
         for p in r["rows"]:put("双方往来对账明细",[r["period"],r["batch"],p["reference"],p["own"],p["partner"],format_amount(p["own_minor"]) if p["own_minor"] is not None else "缺单",format_amount(p["partner_minor"]) if p["partner_minor"] is not None else "缺单",format_amount(p["difference_minor"]),p["status"],p["evidence"]])
+    export_advanced(w,s,put,cancelled)
     for b in w.batches:
         for n,r in enumerate(b.raw.rows):
             if n%250==0:check_cancel(cancelled)
