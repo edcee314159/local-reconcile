@@ -26,7 +26,7 @@ Copy-Item -LiteralPath (Join-Path $SourceDir 'third_party\SOURCE_INFO.md') -Dest
 & $PythonPath -B (Join-Path $PSScriptRoot 'audit_release.py') --app-dir $appDirectory
 if ($LASTEXITCODE -ne 0) {throw '发行模块与库源码覆盖检查失败'}
 & (Join-Path $PSScriptRoot 'verify.ps1') -Stage release -PythonPath $PythonPath -OutputRoot (Join-Path $OutputRoot 'run-artifacts') -ReleaseDir $appDirectory
-$archive=Join-Path $OutputRoot 'release\LocalReconcile-0.5.0-Windows-x64.zip'
+$archive=Join-Path $OutputRoot 'release\LocalReconcile-0.6.0-Windows-x64.zip'
 Compress-Archive -LiteralPath $appDirectory -DestinationPath $archive -Force
 (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLower()+'  '+[IO.Path]::GetFileName($archive) | Set-Content -LiteralPath (Join-Path $OutputRoot 'release\SHA256SUMS.txt') -Encoding ascii
 Write-Output "发行包已生成：$archive"

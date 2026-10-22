@@ -33,6 +33,8 @@ def run_business_smoke(output):
     result.update(run_reporting_smoke(output))
     from .commercial_demo import run_commercial_smoke
     result.update(run_commercial_smoke(output))
+    from .advanced_demo import run_advanced_smoke
+    result.update(run_advanced_smoke(output))
     (output/"business-smoke.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     return result
 

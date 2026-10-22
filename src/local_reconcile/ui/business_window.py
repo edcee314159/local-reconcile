@@ -4,11 +4,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QPushButton,
  QTabWidget,QTableView,QComboBox,QLineEdit,QDialog,QDialogButtonBox,QCheckBox,QSpinBox,QFileDialog,
- QMessageBox,QInputDialog,QPlainTextEdit,QSplitter,QAbstractItemView)
+ QMessageBox,QInputDialog,QPlainTextEdit,QSplitter,QAbstractItemView,QScrollArea)
 from .workers import JobRunner
 from .settlement_pages import SettlementPages
 from .reporting_pages import ReportingPages
 from .commercial_pages import CommercialPages
+from .advanced_pages import AdvancedPages
+from ..business.source_fields import SOURCE_FIELDS
 from ..business.settlements import allocation_net
 from .table_models import DataTableModel
 from .results_page import configure_table
@@ -24,7 +26,7 @@ from ..business.operations import outstanding,open_items,suggest_allocations,sug
 from ..business.storage import save_workspace,load_workspace,export_workspace,import_legacy
 from ..business.demo import make_demo
 
-_NAMES={"bank":"银行流水","ledger":"银行日记账","receivable":"应收明细","payable":"应付明细","receivable_credit":"应收红字/退货折让","payable_credit":"应付红字/退货折让","partner_receivable":"客户对账单（我方应收口径）","partner_payable":"供应商对账单（我方应付口径）"}
+_NAMES={"bank":"银行流水","ledger":"银行日记账","receivable":"应收明细","payable":"应付明细","receivable_credit":"应收红字/退货折让","payable_credit":"应付红字/退货折让","partner_receivable":"客户对账单（我方应收口径）","partner_payable":"供应商对账单（我方应付口径）","settlement_order":"结算原订单","settlement_line":"结算组成明细","cutoff_business":"待核算业务（收货/验收/服务）","cutoff_entry":"实际记账明细（凭证行）"}
 
 def button(text,callback):
     b=QPushButton(text);b.clicked.connect(lambda checked=False:callback());return b
@@ -41,7 +43,7 @@ def populate(t,headers,rows):
     t.setModel(DataTableModel(headers,rows,t))
     t.resizeColumnsToContents()
 
-class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow):
+class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,AdvancedPages,QMainWindow):
     def __init__(self,parent=None):
         super().__init__(parent);self.setWindowTitle("业务核算 · 本地对账工作台");self.resize(1460,960);self.setMinimumSize(1100,780)
         self.workspace=new_workspace();self.analysis=None;self.dirty=False;self.path=None;self.busy=False;self.job_id=0;self.source_signature=None
@@ -55,7 +57,7 @@ class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow)
         layout.addWidget(self.tools)
         self.summary=QLabel();self.summary.setWordWrap(True);self.summary.setObjectName("muted");layout.addWidget(self.summary)
         self.tabs=QTabWidget();self.tabs.setUsesScrollButtons(True);layout.addWidget(self.tabs,1)
-        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page();self._refund_page();self._advance_page();self._balance_page();self._aging_page();self._credit_page();self._duplicate_page();self._partner_page()
+        self._matching_page();self._differences_page();self._period_page();self._allocation_page();self._transfer_page();self._refund_page();self._advance_page();self._balance_page();self._aging_page();self._credit_page();self._duplicate_page();self._partner_page();self._net_settlement_page();self._cutoff_page()
         self.detail=QPlainTextEdit();self.detail.setReadOnly(True);self.detail.setMaximumHeight(115);self.detail.setPlaceholderText("选择记录查看原始文件、字段及核实依据。");layout.addWidget(self.detail)
         bottom=QHBoxLayout();self.status=QLabel("本地人民币业务核算 · 结果需人工确认");bottom.addWidget(self.status,1)
         self.legacy_button=button("导入旧版项目",lambda:self.guard(self.legacy_clicked));bottom.addWidget(self.legacy_button)
@@ -174,6 +176,7 @@ class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow)
         self._refresh_settlements()
         self._refresh_reporting()
         self._refresh_commercial()
+        self._refresh_advanced()
         self.allocation_candidates=();self.transfer_candidates=()
         populate(self.allocation_candidate_table,("候选银行记录","候选单据","建议金额（元）"),[])
         populate(self.transfer_candidate_table,("候选转出","候选转入"),[])
@@ -359,7 +362,7 @@ class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow)
                   lambda raw:self.mapping_dialog(raw,kind,code,path))
 
     def mapping_dialog(self,raw,role,account,path):
-        d=QDialog(self);d.setWindowTitle("确认字段 · "+_NAMES[role]);d.resize(780,740);box=QVBoxLayout(d);panel=SourcePanel(raw.role);panel.set_table(raw,path)
+        d=QDialog(self);d.setWindowTitle("确认字段 · "+_NAMES[role]);d.resize(840,840);outer=QVBoxLayout(d);scroll=QScrollArea();scroll.setWidgetResizable(True);container=QWidget();box=QVBoxLayout(container);scroll.setWidget(container);outer.addWidget(scroll);panel=SourcePanel(raw.role);panel.set_table(raw,path)
         for b in panel.findChildren(QPushButton):b.hide()
         panel.sheet_combo.setEnabled(False);panel.header_spin.setEnabled(False)
         panel.layout().itemAt(0).layout().itemAt(0).widget().setText(_NAMES[role])
@@ -367,28 +370,49 @@ class BusinessWindow(SettlementPages,ReportingPages,CommercialPages,QMainWindow)
             for name,aliases in (("reference_col",("单据编号","发票号码","发票号","单据号")),("amount_col",("单据金额","应收金额","应付金额","未结余额","未结清余额","对账余额","红字金额","折让金额")),("party_col",("客户","供应商","往来单位","客户名称","供应商名称"))):
                 index=next((i for i,h in enumerate(raw.headers) if h.strip() in aliases),None)
                 if index is not None:panel.columns[name].setCurrentIndex(index+1)
-        box.addWidget(panel);due=QComboBox();due.addItem("不提供到期日",None)
+        if role in ("settlement_order","settlement_line","cutoff_business","cutoff_entry"):
+            reference_aliases=("结算行号","结算明细行号") if role=="settlement_line" else ("业务编号","业务单号") if role.startswith("cutoff_") else ("订单号","订单编号")
+            for name,aliases in (("reference_col",reference_aliases),("amount_col",("确认金额","业务金额","订单金额","结算金额","金额")),("date_col",("业务日期","记账日期","结算日期","日期")),("party_col",("平台","单位","往来单位","交易对方"))):
+                index=next((i for i,h in enumerate(raw.headers) if h.strip() in aliases),None)
+                if index is not None:panel.columns[name].setCurrentIndex(index+1)
+        box.addWidget(panel)
+        extra_controls={};extra_form=QFormLayout()
+        for key,(label,required,aliases) in SOURCE_FIELDS.get(role,{}).items():
+            combo=QComboBox();combo.addItem("请选择（必填）" if required else "不提供",None)
+            for i,h in enumerate(raw.headers):combo.addItem(h,i)
+            guessed=next((i for i,h in enumerate(raw.headers) if h.strip() in aliases),None)
+            if guessed is not None:combo.setCurrentIndex(guessed+1)
+            extra_form.addRow(label,combo);extra_controls[key]=combo
+        box.addLayout(extra_form)
+        due=QComboBox();due.addItem("不提供到期日",None)
         for i,h in enumerate(raw.headers):due.addItem(h,i)
         if role in ("receivable","payable"):
             horizontal(box,QLabel("到期日（可选）"),due)
         hint="对方表须为每张单据一行的非负未结余额，按我方应收/应付口径填写，日期为原单据日期" if role.startswith("partner_") else "红字、退货、折让金额可正可负，作为抵减额度；每张单据一行" if role.endswith("_credit") else "应收应付为每张单据一行的正数金额"
+        hints={"settlement_order":"每张原订单一行正数订单金额；编号为原订单号，单位使用平台/结算对方口径。",
+               "settlement_line":"金额：销售和其他加款为正，退款/佣金/运费/其他扣款为负；共同编号字段映射结算行唯一号，另选结算批次和原订单字段。",
+               "cutoff_business":"业务日期为收货/验收/业务发生日；金额为财务确认的待核算总额，业务编号须唯一，归属规则在业务页人工登记。",
+               "cutoff_entry":"日期为记账日期，金额为对应业务的确认金额（冲销为负）；共同编号映射业务编号，另选凭证行唯一编号。与业务基础使用一致金额口径。"}
+        hint=hints.get(role,hint)
         text=QLabel(hint);text.setWordWrap(True);box.addWidget(text)
         confirmed=QCheckBox("已核实字段、金额方向、人民币及来源口径");box.addWidget(confirmed)
-        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);buttons.accepted.connect(d.accept);buttons.rejected.connect(d.reject);box.addWidget(buttons)
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);buttons.accepted.connect(d.accept);buttons.rejected.connect(d.reject);outer.addWidget(buttons)
         if d.exec()!=QDialog.Accepted:return
         mapping=panel.mapping(account or "OPEN-ITEMS",confirmed.isChecked());w=self.workspace;due_col=due.currentData() if role in ("receivable","payable") else None
+        extra_cols={key:combo.currentData() for key,combo in extra_controls.items() if combo.currentData() is not None}
         def work(progress,cancelled):
-            check_cancel(cancelled);result=add_batch(w,role,account,raw,mapping,due_col);check_cancel(cancelled);return result
+            check_cancel(cancelled);result=add_batch(w,role,account,raw,mapping,due_col,extra_cols);check_cancel(cancelled);return result
         def done(result):self.set_workspace(result);self.dirty=True;self.status.setText("来源已导入；同一来源不会重复添加。请分析候选或进入相应业务页。")
         self._run(work,done)
 
     def demo_clicked(self):
         if not self.discard_ok():return
-        choice,ok=QInputDialog.getItem(self,"载入虚构示例","选择示例：",["综合业务（含退款、预收预付、账龄）","月末余额调节与逾期分析","红字退货、重复检查与双方往来对账"],0,False)
+        choice,ok=QInputDialog.getItem(self,"载入虚构示例","选择示例：",["综合业务（含退款、预收预付、账龄）","月末余额调节与逾期分析","红字退货、重复检查与双方往来对账","净到账还原与月末核算检查"],0,False)
         if not ok:return
         from ..business.reporting_smoke import reporting_demo
         from ..business.commercial_demo import commercial_demo
-        factory=commercial_demo if choice.startswith("红字") else reporting_demo if choice.startswith("月末") else make_demo
+        from ..business.advanced_demo import advanced_demo
+        factory=advanced_demo if choice.startswith("净到账") else commercial_demo if choice.startswith("红字") else reporting_demo if choice.startswith("月末") else make_demo
         self._run(lambda progress,cancelled:factory(),lambda w:(self.set_workspace(w),setattr(self,"dirty",True),setattr(self,"path",None),self.status.setText("已载入虚构示例，可进入相应业务页复核。")))
 
     def save_to(self,path,close_after=False):

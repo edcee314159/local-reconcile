@@ -1,6 +1,6 @@
 # Local Reconcile
 
-A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.5.0**. MIT-licensed application code; dependencies retain their own licenses.
+A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.6.0**. MIT-licensed application code; dependencies retain their own licenses.
 
 [中文](README.md)
 
@@ -35,6 +35,14 @@ Choose the synthetic period-end example from the example picker. Workspaces cont
 - Month-end snapshots and Excel exports retain the comparison and duplicate evidence. Re-importing an unchanged statement in a later month creates a separate monthly snapshot. New events require version 0.5.0 or later. Choose the new synthetic commercial example to explore the workflows.
 
 [Download the Windows portable release](https://github.com/edcee314159/local-reconcile/releases/latest).
+
+## Net settlements and month-end recognition checks
+
+- Import original gross orders, signed settlement components and bank records. Sales/additions are positive; refunds, commissions, freight and deductions are negative. Each component needs a unique line ID and settlement ID; sales/refunds need exact original order references and party names.
+- Reconstruct net cash from explicit evidence. Missing orders, cumulative over-settlement or over-refund prevent confirmation. Confirm only an exact signed bank total from one own CNY account (a zero-net batch without cash movement may use no bank rows with evidence); bank records cannot be confirmed in two settlement groups. This proof does not post revenue/expenses or allocate invoice balances. Changed sources require another review, even after exclusion/restore.
+- Separately import positive receipt/acceptance/service business amounts and signed actual posting entries with unique voucher-line IDs. Confirm a consistent amount basis and an evidenced once/monthly/daily recognition rule manually. Integer schedules conserve the original amount, including leap days and rounding remainders.
+- Compare expected and actual amounts for the current month and separately for earlier periods. Missing rules remain unknown; unmatched postings stay visible; future postings do not count in the current month. Flag invoice/payment timing differences and negative cumulative postings. Explanations never clear the underlying discrepancy.
+- Current reports may include late evidence with prior business dates; immutable month-end snapshots retain what was known then. Six Excel sheets expose summaries, components, order checks, bank proof, recognition differences and source evidence. Choose the new synthetic advanced example. New events/extra source mappings require version 0.6.0 or later; earlier workspaces remain readable.
 
 ## Run
 
