@@ -1,8 +1,16 @@
 # Local Reconcile
 
-A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.6.0**. MIT-licensed application code; dependencies retain their own licenses.
+A local Windows reconciliation and settlement workbench for Chinese private businesses. Version **0.7.0**. MIT-licensed application code; dependencies retain their own licenses.
 
 [中文](README.md)
+
+## Evidence, contract milestones and corrections
+
+- Group structured business documents by exact party, business ID and receivable/payable direction. Explicit required-document rules flag missing proof, signed-invoice/net-payment limits and unlinked cash. Bank proof is separate from document amounts; confirmation requires a clean evidenced review.
+- Register contract milestones with positive planned amounts, verified triggers and explicit day offsets. Missing acceptance/invoice evidence leaves the due date unknown. Track actual settlement/refunds, outstanding amounts, overdue days and early/unverified-condition payments.
+- Queue correction operations and preview their effects on balances, aging, reconciliation and milestones without modifying the workspace. Dependencies remain explicit. Apply resimulates the entire plan atomically, rejects changed workspaces/plans/reasons and retains audit evidence.
+
+Choose the synthetic evidence/contract/correction example in the business workbench. Import `business_evidence` with date, amount, party, unique document ID, business ID, kind and receivable/payable direction. Contract/payment/refund documents require positive amounts; signed nonzero invoices support credits; other proof can be zero. No OCR, legal-term interpretation or automatic posting. Evidence and milestone bank links are independent proof layers with separate capacity limits; they do not consume invoice allocations. Due/overdue status is measured at the selected month end. Late evidence affects current reports while stored month ends remain immutable. New events require 0.7.0 or later; older workspaces remain readable.
 
 ## Business workflows
 

@@ -6,7 +6,7 @@ from local_reconcile.ui.business_window import BusinessWindow
 def test_balance_adjustment_page_and_manual_classification(app):
     w=BusinessWindow()
     try:
-        w.set_workspace(fixture());assert w.tabs.count()==14
+        w.set_workspace(fixture());assert w.tabs.count()==17
         w.bank_closing.setText('1000');w.ledger_closing.setText('960');w.balance_evidence.setText('期末余额资料');w.save_balances_selected()
         rows=list(w.workspace.records)
         for rid in rows:

@@ -132,6 +132,8 @@ def export_workspace(w,path,cancelled=never_cancel):
       "操作记录":["序号","操作","内容"]}
     from .advanced_export import HEADERS,export_advanced
     headers.update(HEADERS)
+    from .audit_export import HEADERS as AUDIT_HEADERS,export_audit
+    headers.update(AUDIT_HEADERS)
     for name,head in headers.items():sheets[name]=wb.create_sheet(name);_append(sheets[name],head)
     def put(name,row):_append(sheets[name],row)
     batches={b.id:b for b in w.batches};source_rows={b.id:{r.id:r for r in b.raw.rows} for b in w.batches}
@@ -216,6 +218,7 @@ def export_workspace(w,path,cancelled=never_cancel):
         put("双方往来对账汇总",[r["period"],r["batch"],r["party"],r["role"],r["as_of"],format_amount(r["own_total_minor"]),format_amount(r["partner_total_minor"]),format_amount(r["difference_minor"]),r["confirmed_count"],r["explained_count"],r["unreviewed_count"],r["evidence"]])
         for p in r["rows"]:put("双方往来对账明细",[r["period"],r["batch"],p["reference"],p["own"],p["partner"],format_amount(p["own_minor"]) if p["own_minor"] is not None else "缺单",format_amount(p["partner_minor"]) if p["partner_minor"] is not None else "缺单",format_amount(p["difference_minor"]),p["status"],p["evidence"]])
     export_advanced(w,s,put,cancelled)
+    export_audit(w,s,put,cancelled)
     for b in w.batches:
         for n,r in enumerate(b.raw.rows):
             if n%250==0:check_cancel(cancelled)

@@ -75,3 +75,7 @@ def test_packaged_five_business_workflows(tmp_path):
     assert data["net_settlement_minor"]==9200 and data["net_settlement_confirmed"]
     assert data["cutoff_missing_minor"]==3000 and data["cutoff_monthly_minor"]==10000
     assert data["cutoff_unmatched_postings"]==1 and data["advanced_history_preserved"]
+
+    assert data["evidence_chain_confirmed"] is True
+    assert data["contract_stage_count"]==3 and data["contract_paid_minor"]==30000
+    assert data["correction_audit_count"]==1 and data["audit_history_preserved"] is True

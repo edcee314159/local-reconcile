@@ -47,7 +47,7 @@ def apply_duplicate(w, s, e):
 
 
 def guard_duplicate_use(w, s, e):
-    keys = {"confirm_net_settlement": ("banks",), "confirm_match": ("left", "right"), "allocate": ("cash",),
+    keys = {"link_evidence_cash": ("cash",), "link_stage_cash": ("cash",), "confirm_net_settlement": ("banks",), "confirm_match": ("left", "right"), "allocate": ("cash",),
             "register_advance": ("cash",), "allocate_advance": ("advance",), "refund": ("original", "cash"),
             "confirm_transfer": ("outgoing", "incoming"), "classify_unreconciled": ("row",),
             "explain": ("bank", "ledger")}.get(e.kind)
